@@ -1,0 +1,77 @@
+#Cartesian CWB problem
+#Note: To run using MPI, the MeshBlock size must be defined!
+
+<comment>
+problem   = CWB
+reference = Pittard
+configure = --prob=cwb
+
+<job>
+problem_id = cwb3D_amrv7    # problem ID: basename of output filenames
+
+<output1>
+file_type  = hst        # History data dump
+dt         = 1.0e4      # time increment between outputs (s)
+
+<output2>
+file_type  = hdf5       # HDF5 data dump
+variable   = prim       # variables to be output
+id         = prim       # identifier in filename
+dt         = 1.0e4      # time increment between outputs
+
+<time>
+cfl_number = 0.4        # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = 100000     # cycle limit
+tlim       = 1.0e7      # time limit
+integrator  = vl2       # time integration algorithm
+xorder      = 2         # order of spatial reconstruction
+ncycle_out  = 1        # interval for stdout summary info
+
+<mesh>
+nx1        = 24        # Number of zones in X1-direction
+x1min      = -2.0e13    # minimum value of X1
+x1max      = 2.0e13     # maximum value of X1
+ix1_bc     = outflow    # inner-X1 boundary flag
+ox1_bc     = outflow    # outer-X1 boundary flag
+
+nx2        = 24         # Number of zones in X2-direction
+x2min      = -2.0e13    # minimum value of X2
+x2max      = 2.0e13     # maximum value of X2
+ix2_bc     = outflow    # inner-X2 boundary flag
+ox2_bc     = outflow    # outer-X2 boundary flag
+
+nx3        = 24         # Number of zones in X3-direction
+x3min      = -2.0e13    # minimum value of X3
+x3max      = 2.0e13     # maximum value of X3
+ix3_bc     = outflow    # inner-X3 boundary flag 
+ox3_bc     = outflow    # outer-X3 boundary flag
+
+refinement = adaptive     # this must be in <mesh> section!
+numlevel       = 7
+deref_count    = 10
+
+<meshblock>
+nx1     =    4
+nx2     =    4
+nx3     =    4
+
+<hydro>
+gamma      = 1.66667    # gamma = C_p/C_v
+
+<problem>
+mdot1      = 4.0e-6     # Mass-loss rate of star 1 (Msol/yr)
+mdot2      = 1.0e-6     # Mass-loss rate of star 2 (Msol/yr)
+vinf1      = 2.0e8      # Terminal wind speed of star 1 (cm/s)
+vinf2      = 2.0e8      # Terminal wind speed of star 2 (cm/s)
+xpos1      = -1.0e13    # Coordinate-1 position of star 1 (cm)
+ypos1      = 0.0        # Coordinate-2 position of star 1 (cm)
+zpos1      = 0.0        # Coordinate-3 position of star 1 (cm)
+xpos2      = 1.0e13     # Coordinate-1 position of star 2 (cm)
+ypos2      = 0.0        # Coordinate-2 position of star 2 (cm)
+zpos2      = 0.0        # Coordinate-3 position of star 2 (cm)
+mass1      = 30.0       # Mass of star 1 (Msol)
+mass2      = 30.0       # Mass of star 2 (Msol)
+
+ecc = 0.0               # orbit eccentricity
+period = 6.298e6        # orbit period (s)
+phaseoff = 0.25          # orbit phase offset (from periastron)

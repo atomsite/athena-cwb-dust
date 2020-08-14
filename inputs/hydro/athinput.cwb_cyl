@@ -56,7 +56,9 @@ gamma           = 1.666666666667 # gamma = C_p/C_v
 
 <problem>
 
+# Star properties
 orbit = false
+cool  = true
 
 # Wolf Rayet Properties
 x1_wr    = 0.      # 1st axis position (cm)
@@ -90,4 +92,3 @@ z_min     = 1e-8
 bulk_dens = 3.0
 stick_eff = 0.01
 nuc_temp  = 1e4
-
