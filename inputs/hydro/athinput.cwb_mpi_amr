@@ -22,7 +22,7 @@ dt         = 1.0e4      # time increment between outputs
 <time>
 cfl_number = 0.4        # The Courant, Friedrichs, & Lewy (CFL) Number
 nlim       = 100000     # cycle limit
-tlim       = 1.0e7      # time limit
+tlim       = 1.0e6      # time limit
 integrator  = vl2       # time integration algorithm
 xorder      = 2         # order of spatial reconstruction
 ncycle_out  = 1        # interval for stdout summary info
@@ -47,13 +47,13 @@ ix3_bc     = outflow    # inner-X3 boundary flag
 ox3_bc     = outflow    # outer-X3 boundary flag
 
 refinement = adaptive     # this must be in <mesh> section!
-numlevel       = 7
-deref_count    = 10
+numlevel       = 5
+derefine_count    = 10
 
 <meshblock>
-nx1     =    4
-nx2     =    4
-nx3     =    4
+nx1     =    8
+nx2     =    8
+nx3     =    8
 
 <hydro>
 gamma      = 1.66667    # gamma = C_p/C_v
@@ -74,4 +74,4 @@ mass2      = 30.0       # Mass of star 2 (Msol)
 
 ecc = 0.0               # orbit eccentricity
 period = 6.298e6        # orbit period (s)
-phaseoff = 0.25          # orbit phase offset (from periastron)
+phaseoff = 0.00          # orbit phase offset (from periastron)
