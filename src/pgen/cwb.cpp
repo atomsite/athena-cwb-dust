@@ -77,7 +77,7 @@ namespace {
   Real nuc_temp;
 
   // Simulation parameters
-  int  remap = 10;     // Remap radius
+  int  remap = 3;     // Remap radius
   bool orbit = false;  // Turn on orbital dynamics
   bool cool  = false;  // Turn on cooling
 
@@ -91,7 +91,7 @@ namespace {
   Real Msol   = 1.9891e33;      // 1 Solar mass (g)
   Real yr     = 3.15569e7;      // Seconds in a year (s)
   // Thermodynamic properties
-  Real g = 5.0 / 3.0;  // Ratio of specific heats, gamma
+  Real g  = 5.0 / 3.0;  // Ratio of specific heats, gamma
   Real g1 = g - 1;     // Gamma-1
 }
 
@@ -113,7 +113,6 @@ void CalcOrbit(Real t) {
   Real rrel;
   Real M,gamma_ang;
   Real dx,dy; 
-
 
   time_offset = phase_offset * period;
   t_orbit     = t + time_offset;
@@ -166,11 +165,13 @@ void CalcOrbit(Real t) {
   OB.v[0] = -v2 * std::sin(ang);
   OB.v[1] =  v2 * std::cos(ang);
   // Update dsep and rob
-  dx    = WR.x[0] - OB.x[0];
-  dy    = WR.x[1] - OB.x[1];
-  dsep  = std::sqrt(SQR(dx) + SQR(dy));
-  rob   = (std::sqrt(eta)/(1.0 + std::sqrt(eta))) * dsep;
-  rwr   = dsep - rob;
+  dx   = WR.x[0] - OB.x[0];
+  dy   = WR.x[1] - OB.x[1];
+  dsep = std::sqrt(SQR(dx) + SQR(dy));
+  rob  = (std::sqrt(eta)/(1.0 + std::sqrt(eta))) * dsep;
+  rwr  = dsep - rob;
+
+  return;
 }
 
 void RemapWinds(MeshBlock *pmb, const Real time, const Real dt,
@@ -210,10 +211,10 @@ void RemapWinds(MeshBlock *pmb, const Real time, const Real dt,
       Real zc  = pmb->pcoord->x3v(k) - Star->x[2];
       Real zc2 = SQR(zc);
       for (int j=jstl; j<=jstu; ++j) {
-        Real yc  = pmb->pcoord->x2v(k) - Star->x[1];
+        Real yc  = pmb->pcoord->x2v(j) - Star->x[1];
         Real yc2 = SQR(yc);
         for (int i=istl; i<=istu; ++i) {
-          Real xc  = pmb->pcoord->x1v(k) - Star->x[0];
+          Real xc  = pmb->pcoord->x1v(i) - Star->x[0];
           Real xc2 = SQR(xc);
           Real r2  = xc2 + yc2 + zc2;
           Real r   = std::sqrt(r2);
@@ -227,7 +228,6 @@ void RemapWinds(MeshBlock *pmb, const Real time, const Real dt,
             Real u1, u2, u3;
             Real pre = (rho / Star->avgm) * kboltz * Star->twnd;
             Real ke  = 0.5 * rho * SQR(Star->vinf);
-
             if (coord == CART) {
               Real costht = xc/xy;
               Real sintht = yc/xy;
@@ -268,19 +268,37 @@ void CoolingFunction(MeshBlock *pmb, const Real time, const Real dt,
     for (int k=pmb->ks; k<=pmb->ke; ++k) {
       for (int j=pmb->js; j<=pmb->je; ++j) {
         for (int i=pmb->is; i<=pmb->ie; ++i) {
-          Real T   = (prim(IEN,k,j,i) * Star->avgm)/(prim(IDN,k,j,i) * kboltz);
           Real rho = prim(IDN,k,j,i);
+          Real T   = (prim(IEN,k,j,i) * Star->avgm)/(prim(IDN,k,j,i) * kboltz);
           Real wnd = pmb->pscalars->r(0,k,j,i);
           // Calculate temperature loss due to plasma emission
           Real Lambda = CCurve.FindLambda(T);
           Real eConst = SQR(rho) / SQR(massh);
           Real eLoss  = eConst * Lambda * dt;
           // Remove energy from convserved energy
-          cons(IEN,k,j,i) -= eLoss * wnd;
+          cons(IEN,k,j,i) -= eLoss * 1e2;
         }
       }
     }
   }
+}
+
+//! \fn void CWBExplicitSourceFunction
+//  \brief Function containing smaller functions to be enrolled into meshblock class
+//  As only one explicit source function can be enrolled into Athena, and
+//  using a single long source function would be clunky, this funciton
+//  is used to 
+
+void CWBExplicitSourceFunction(MeshBlock *pmb, const Real time, const Real dt,
+                               const AthenaArray<Real> &prim,
+                               const AthenaArray<Real> &bcc,
+                               AthenaArray<Real> &cons) {
+  // Run cooling function
+  CoolingFunction(pmb,time,dt,prim,bcc,cons);
+  // Map wind onto new regions
+  RemapWinds(pmb,time,dt,prim,bcc,cons);
+  // Finish up
+  return;
 }
 
 int CWBRefinementCondition(MeshBlock *pmb) {
@@ -288,7 +306,11 @@ int CWBRefinementCondition(MeshBlock *pmb) {
   Real dy = pmb->pcoord->dx2f(0);
   Real dz = pmb->pcoord->dx3f(0);
 
-  // Check to see if cell is within 10(?) coarse cells of remap zone
+  // Refine around stagnation point
+
+
+  // Refine based on proximity to remap zone
+  // Check to see if cell is within 10 cells of remap zone
   bool derefineWind = true;
   for (auto Star : Stars) {
     for (int k=pmb->ks; k<=pmb->ke; ++k) {
@@ -360,7 +382,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     EnrollUserRefinementCondition(CWBRefinementCondition);
   }
   // Source functions
-  EnrollUserExplicitSourceFunction(RemapWinds);
+  // EnrollUserExplicitSourceFunction(RemapWinds);
+  EnrollUserExplicitSourceFunction(CWBExplicitSourceFunction);
   
   return;
 }
