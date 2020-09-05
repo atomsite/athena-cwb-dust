@@ -12,7 +12,7 @@ variable   = prim       # variables to be output
 dt         = 1e4        # time increment between outputs
 
 <time>
-cfl_number  = 0.4       # The Courant, Friedrichs, & Lewy (CFL) Number
+cfl_number  = 0.3       # The Courant, Friedrichs, & Lewy (CFL) Number
 nlim        = -1        # cycle limit
 tlim        = 1e6       # time limit
 integrator  = rk3       # time integration algorithm
@@ -21,26 +21,26 @@ ncycle_out  = 1         # interval for stdout summary info
 
 <mesh>
 <mesh>
-nx1        = 200        # Number of zones in X1-direction
-x1min      = -4.0e13    # minimum value of X1
-x1max      = 4.0e13     # maximum value of X1
+nx1        = 250        # Number of zones in X1-direction
+x1min      = -8.0e13    # minimum value of X1
+x1max      = 8.0e13     # maximum value of X1
 ix1_bc     = outflow    # inner-X1 boundary flag
 ox1_bc     = outflow    # outer-X1 boundary flag
 
-nx2        = 200         # Number of zones in X2-direction
-x2min      = -4.0e13    # minimum value of X2
-x2max      = 4.0e13     # maximum value of X2
+nx2        = 250        # Number of zones in X2-direction
+x2min      = -8.0e13    # minimum value of X2
+x2max      = 8.0e13     # maximum value of X2
 ix2_bc     = outflow    # inner-X2 boundary flag
 ox2_bc     = outflow    # outer-X2 boundary flag
 
-nx3        = 1         # Number of zones in X3-direction
+nx3        = 1          # Number of zones in X3-direction
 x3min      = -2.5e11    # minimum value of X3
 x3max      = 2.5e11     # maximum value of X3
 ix3_bc     = outflow    # inner-X3 boundary flag 
 ox3_bc     = outflow    # outer-X3 boundary flag
 
 refinement = adaptive     # this must be in <mesh> section!
-numlevel       = 5
+numlevel       = 1
 derefine_count = 20
 
 <meshblock>
@@ -53,7 +53,7 @@ gamma      = 1.666666666667 # gamma = C_p/C_v
 
 <problem>
 
-coolcurve = coolcurve_solar.dat
+coolcurve = rkcoolcurve.dat
 
 # Star properties
 orbit = true
@@ -85,11 +85,11 @@ x3_ob    = 0.        # 3rd axis position (cm)
 remap_ob = 0.1   # Remap radius expressed in the number of coarse cells
 
 #mdot_ob = 6.0e-8  # Mass loss rate (Msol/yr)
-#mass_ob = 20      # Star mas (msol)
-#vinf_ob = 2.00e8  # Terminal velocity (cm/s)
+mass_ob = 20      # Star mas (msol)
+vinf_ob = 2.00e8  # Terminal velocity (cm/s)
 mdot_ob  = 3.0e-5  # Mass loss rate (Msol/yr)
-mass_ob  = 10      # Star mas (msol)
-vinf_ob  = 1.22e8  # Terminal velocity (cm/s)
+#mass_ob  = 10      # Star mas (msol)
+#vinf_ob  = 1.22e8  # Terminal velocity (cm/s)
 twnd_ob = 3e4     # Wind temperature (K)
 X_ob    = 0.705   # Hydrogen mass fraction
 Y_ob    = 0.275   # Helium mass fraction

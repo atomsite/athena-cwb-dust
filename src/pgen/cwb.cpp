@@ -77,7 +77,7 @@ namespace {
   Real nuc_temp;
 
   // Simulation parameters
-  int  remap = 3;     // Remap radius
+  int  remap = 6;     // Remap radius
   bool orbit = false;  // Turn on orbital dynamics
   bool cool  = false;  // Turn on cooling
 
@@ -85,7 +85,7 @@ namespace {
   int coord; // Coordinate system, 0 for cartesian, 1 for cylindrical
 
   // Constants, all values are in CGS
-  Real massh  = 1.6735575e-21;  // Hydrogen atom mass (g)
+  Real massh  = 1.6735575e-24;  // Hydrogen atom mass (g)
   Real kboltz = 1.380649e-16;   // Boltzmann constant (erg K^-1)
   Real G      = 6.67259e-8;     // Gravitational constant (dyn cm^2 g^-2)
   Real Msol   = 1.9891e33;      // 1 Solar mass (g)
@@ -265,22 +265,40 @@ void CoolingFunction(MeshBlock *pmb, const Real time, const Real dt,
                      const AthenaArray<Real> &bcc, AthenaArray<Real> &cons)
 {
   for (auto Star : Stars) {
-    for (int k=pmb->ks; k<=pmb->ke; ++k) {
+      for (int k=pmb->ks; k<=pmb->ke; ++k) {
       for (int j=pmb->js; j<=pmb->je; ++j) {
         for (int i=pmb->is; i<=pmb->ie; ++i) {
+
+          Real wm = pmb->pscalars->r(0,k,j,i);
+          Real contrib;
+
+          if (NSCALARS > 0) {
+            if (Star->scal == 1) {contrib = wm;}   // Star is primary
+            if (Star->scal == 0) {contrib = 1-wm;} // Star is secondary
+          }
+          else {contrib = 0.5;}
+
           Real rho = prim(IDN,k,j,i);
-          Real T   = (prim(IEN,k,j,i) * Star->avgm)/(prim(IDN,k,j,i) * kboltz);
+          Real T   = (prim(IEN,k,j,i) * Star->avgm * g1)/(prim(IDN,k,j,i) * kboltz);
           Real wnd = pmb->pscalars->r(0,k,j,i);
-          // Calculate temperature loss due to plasma emission
-          Real Lambda = CCurve.FindLambda(T);
-          Real eConst = SQR(rho) / SQR(massh);
-          Real eLoss  = eConst * Lambda * dt;
-          // Remove energy from convserved energy
-          cons(IEN,k,j,i) -= eLoss * 1e2;
+          if (T > 1.1 * CCurve.tmin) {
+            // Calculate temperature loss due to plasma emission
+            Real Lambda = CCurve.FindLambda(T);
+            Real eConst = SQR(rho) / SQR(massh);
+            Real eLoss  = eConst * Lambda * dt;
+            eLoss *= contrib;
+            // Evaluate whether energy is reduced below the minimum energy
+            Real eMin   = (prim(IDN,k,j,i) * kboltz * CCurve.tmin) / (g1 * Star->avgm);
+            Real eNew   = cons(IEN,k,j,i) - eLoss;
+            eNew        = std::max(eNew,eMin);
+            // Write new total energy to conserved variable array
+            cons(IEN,k,j,i) = eNew;
+          }
         }
       }
     }
   }
+  return;
 }
 
 //! \fn void CWBExplicitSourceFunction
@@ -521,7 +539,12 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
         phydro->u(IM1,k,j,i) = rho * u1;
         phydro->u(IM2,k,j,i) = rho * u2;
         phydro->u(IM3,k,j,i) = rho * u3;
-        phydro->u(IEN,k,j,i) = (pre/g1) + ke;
+        phydro->u(IEN,k,j,i) = pre/g1 + ke;
+
+        if (NSCALARS > 0) {
+          pscalars->s(0,k,j,i) = Stars[sid]->scal * rho;
+          pscalars->r(0,k,j,i) = Stars[sid]->scal;
+        }
       }
     }
   }

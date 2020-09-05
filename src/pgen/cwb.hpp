@@ -100,7 +100,7 @@ class CoolCurve {
     std::vector<Real> temp;   // Temperature (K)
     std::vector<Real> lambda;  // Energy loss constant
     Real tmin, tmax;  // Values of first and last index in temp
-    Real gmin, gmax;  // Values of first and last index in lambda
+    Real lmin, lmax;  // Values of first and last index in lambda
     // Functions
     int  Init(std::string coolCurveFileName);
     Real FindLambda(Real t);
@@ -142,6 +142,7 @@ int CoolCurve::Init(std::string coolCurveFileName) {
   // Convert log(T) to T
   for (int n = 0; n < temp.size(); n++) {
     temp[n] = pow(10.0,temp[n]);
+    printf("%.3e %.3e\n",temp[n],lambda[n]);
   }
 
   // Compare lengths of vectors, if they are not the same, import has failed
@@ -156,8 +157,10 @@ int CoolCurve::Init(std::string coolCurveFileName) {
 
   tmin = temp.front();
   tmax = temp.back();
-  gmin = lambda.front();
-  gmax = lambda.back();
+  lmin = lambda.front();
+  lmax = lambda.back();
+
+  // std::cout << tmin << " " << tmax << " " << lmin << " " << lmax << "\n";
 
   return 0;
 }
@@ -170,7 +173,7 @@ int CoolCurve::Init(std::string coolCurveFileName) {
 Real CoolCurve::FindLambda(Real t) {
   // Quickly return values that would cause search to fail
   if      (t <= tmin) {return 0.0;}
-  else if (t >= tmax) {return gmax;}
+  else if (t >= tmax) {return lmax;}
   // Perform binary search
   auto upper = std::upper_bound(temp.begin(), temp.end(), t);
   // Assign indexes based on search
@@ -180,9 +183,9 @@ Real CoolCurve::FindLambda(Real t) {
   // Assign values from each array from indexes found by binary search
   Real tl = temp[il];
   Real tu = temp[iu];
-  Real gl = lambda[il];
-  Real gu = lambda[iu];
+  Real ll = lambda[il];
+  Real lu = lambda[iu];
   // Calculate interpolated value of lambda
-  Real g  = gl + ((t - tl) * ((gu - gl) / (tu - tl)));
-  return g;
+  Real l  = ll + ((t - tl) * ((lu - ll) / (tu - tl)));
+  return l;
 }
