@@ -21,26 +21,26 @@ ncycle_out  = 1         # interval for stdout summary info
 
 <mesh>
 <mesh>
-nx1        = 250        # Number of zones in X1-direction
-x1min      = -8.0e13    # minimum value of X1
-x1max      = 8.0e13     # maximum value of X1
+nx1        = 100        # Number of zones in X1-direction
+x1min      = -2.0e13    # minimum value of X1
+x1max      = 2.0e13     # maximum value of X1
 ix1_bc     = outflow    # inner-X1 boundary flag
 ox1_bc     = outflow    # outer-X1 boundary flag
 
-nx2        = 250        # Number of zones in X2-direction
-x2min      = -8.0e13    # minimum value of X2
-x2max      = 8.0e13     # maximum value of X2
+nx2        = 100        # Number of zones in X2-direction
+x2min      = -2.0e13    # minimum value of X2
+x2max      = 2.0e13     # maximum value of X2
 ix2_bc     = outflow    # inner-X2 boundary flag
 ox2_bc     = outflow    # outer-X2 boundary flag
 
 nx3        = 1          # Number of zones in X3-direction
-x3min      = -2.5e11    # minimum value of X3
-x3max      = 2.5e11     # maximum value of X3
+x3min      = -2.0e11    # minimum value of X3
+x3max      = 2.0e11     # maximum value of X3
 ix3_bc     = outflow    # inner-X3 boundary flag 
 ox3_bc     = outflow    # outer-X3 boundary flag
 
 refinement = adaptive     # this must be in <mesh> section!
-numlevel       = 1
+numlevel       = 4
 derefine_count = 20
 
 <meshblock>
@@ -62,7 +62,7 @@ cool  = true
 # Orbital properties
 period       = 1e7
 ecc          = 0.0
-phase_offset = 0.25
+phase_offset = 0.375
 
 # Wolf Rayet Properties
 x1_wr    = -2.5e13 # 1st axis position (cm)

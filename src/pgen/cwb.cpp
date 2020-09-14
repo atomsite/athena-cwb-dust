@@ -76,6 +76,9 @@ namespace {
   Real stick_eff;
   Real nuc_temp;
 
+  // Refinement parameters
+  int G0_level = 0;
+
   // Simulation parameters
   int  remap = 6;     // Remap radius
   bool orbit = false;  // Turn on orbital dynamics
@@ -264,6 +267,7 @@ void CoolingFunction(MeshBlock *pmb, const Real time, const Real dt,
                      const AthenaArray<Real> &prim,
                      const AthenaArray<Real> &bcc, AthenaArray<Real> &cons)
 {
+  int nstep = 5;
   for (auto Star : Stars) {
       for (int k=pmb->ks; k<=pmb->ke; ++k) {
       for (int j=pmb->js; j<=pmb->je; ++j) {
@@ -279,21 +283,47 @@ void CoolingFunction(MeshBlock *pmb, const Real time, const Real dt,
           else {contrib = 0.5;}
 
           Real rho = prim(IDN,k,j,i);
-          Real T   = (prim(IEN,k,j,i) * Star->avgm * g1)/(prim(IDN,k,j,i) * kboltz);
+          Real pg  = prim(IEN,k,j,i);
+          Real T   = (pg * Star->avgm * g1) / (rho * kboltz);
           Real wnd = pmb->pscalars->r(0,k,j,i);
-          if (T > 1.1 * CCurve.tmin) {
-            // Calculate temperature loss due to plasma emission
-            Real Lambda = CCurve.FindLambda(T);
-            Real eConst = SQR(rho) / SQR(massh);
-            Real eLoss  = eConst * Lambda * dt;
-            eLoss *= contrib;
-            // Evaluate whether energy is reduced below the minimum energy
-            Real eMin   = (prim(IDN,k,j,i) * kboltz * CCurve.tmin) / (g1 * Star->avgm);
-            Real eNew   = cons(IEN,k,j,i) - eLoss;
-            eNew        = std::max(eNew,eMin);
-            // Write new total energy to conserved variable array
-            cons(IEN,k,j,i) = eNew;
+          Real dts = dt/nstep;
+
+          Real eLoss = 0.0;
+
+          if (T > 1e3) 
+            for (int ns = 0; ns < nstep; ns++) {
+              Real Lambda = CCurve.FindLambda(T);
+              Real eConst = SQR(rho) / SQR(massh);
+              Real TConst = (g1 * Star->mu * rho) / (massh * kboltz);
+              Real eLossStep  = eConst * Lambda * dts;
+              Real TLossStep  = TConst * Lambda * dts;
+              eLoss -= eLossStep;
+              T     -= TLossStep;
+            }
           }
+
+          cons(IEN,k,j,i) += eLoss*1e-3;
+          
+
+          
+          
+          
+          // Real rho = prim(IDN,k,j,i);
+          // Real T   = (prim(IEN,k,j,i) * Star->avgm * g1)/(prim(IDN,k,j,i) * kboltz);
+          // Real wnd = pmb->pscalars->r(0,k,j,i);
+          // if (T > 1.1 * CCurve.tmin) {
+          //   // Calculate temperature loss due to plasma emission
+          //   Real Lambda = CCurve.FindLambda(T);
+          //   Real eConst = SQR(rho) / SQR(massh);
+          //   Real eLoss  = eConst * Lambda * dt;
+          //   eLoss *= contrib;
+          //   // Evaluate whether energy is reduced below the minimum energy
+          //   Real eMin   = (prim(IDN,k,j,i) * kboltz * CCurve.tmin) / (g1 * Star->avgm);
+          //   Real eNew   = cons(IEN,k,j,i) - eLoss;
+          //   eNew        = std::max(eNew,eMin);
+          //   // Write new total energy to conserved variable array
+          //   cons(IEN,k,j,i) = eNew;
+          // }
         }
       }
     }
@@ -320,11 +350,85 @@ void CWBExplicitSourceFunction(MeshBlock *pmb, const Real time, const Real dt,
 }
 
 int CWBRefinementCondition(MeshBlock *pmb) {
+  AthenaArray<Real> &w = pmb->phydro->w;
+  AthenaArray<Real> &r = pmb->pscalars->r;
+
   Real dx = pmb->pcoord->dx1f(0);
   Real dy = pmb->pcoord->dx2f(0);
   Real dz = pmb->pcoord->dx3f(0);
 
   // Refine around stagnation point
+  
+  Real epsilon = 0.33;
+  Real avgmass = 1.0e-24;
+  Real boltzman = 1.380658e-16;
+  Real pi = 2.0*asin(1.0);
+
+  // Mesh contains: root_level, max_level, current_level;
+  static bool first = true;
+  if (first){
+    G0_level = pmb->loc.level;
+    first = false;
+  }
+  
+  int levelAboveRoot = pmb->loc.level - G0_level;
+  //std::cout << "currentLevel = " << currentLevel << "\n";
+  //std::cout << "root_level = " << pmb->pmy_mesh->root_level << "\n";
+  //exit(EXIT_SUCCESS);
+
+  Real stagx, stagy, stagz;
+
+  Real dxx = WR.x[0] - OB.x[0];
+  Real dyy = WR.x[1] - OB.x[1];
+  Real theta = std::atan2(dyy,dxx);
+
+  if (std::strcmp(COORDINATE_SYSTEM, "cartesian") == 0) {	
+    stagx = OB.x[0] + (rob * std::cos(theta));
+    stagy = OB.x[1] + (rob * std::sin(theta));
+    stagz = 0.0;
+  }
+
+  for(int k=pmb->ks-1; k<=pmb->ke+1; k++) {
+    Real dz = (pmb->pcoord->x3v(k+1) - pmb->pcoord->x3v(k-1));
+    for(int j=pmb->js-1; j<=pmb->je+1; j++) {
+      Real dy = (pmb->pcoord->x2v(j+1) - pmb->pcoord->x2v(j-1));
+      for(int i=pmb->is-1; i<=pmb->ie+1; i++) {
+        Real dx = (pmb->pcoord->x1v(i+1) - pmb->pcoord->x1v(i-1));
+	      // Refine on divergence condition
+	      Real divV = 0.0;
+        //if (std::strcmp(COORDINATE_SYSTEM, "cartesian") == 0) {	
+        Real dudx = (w(IVX,k,j,i+1)-w(IVX,k,j,i-1))/dx;
+        Real dvdy = (w(IVY,k,j+1,i)-w(IVY,k,j-1,i))/dy;
+        Real dwdz = (w(IVZ,k+1,j,i)-w(IVZ,k-1,j,i))/dz;
+        divV = dudx + dvdy + dwdz;
+	 
+        if (divV < 0.0){ // potentially refine
+          // Check to see if not too far away from the stagnation point.
+          //**** CHECK ALL OF THIS!!!!****
+          Real x,y,z;
+                if (std::strcmp(COORDINATE_SYSTEM, "cartesian") == 0) {	
+            x = pmb->pcoord->x1v(i) - stagx;
+            y = pmb->pcoord->x2v(j) - stagy;
+            z = pmb->pcoord->x3v(k) - stagz;
+          }
+          else if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) {
+            x = pmb->pcoord->x1v(i);
+            y = 0.0;
+            z = pmb->pcoord->x3v(k) - stagz;
+          }
+          Real r2 = x*x + y*y + z*z;
+          Real r = std::sqrt(r2);
+          int ri = int(r/dx);
+          //return 1;              // always refine
+          if (ri < 10) return 1; // refine (dx is twice as big as previously)
+          else if (ri < 30);     // do nothing
+          else return -1;	 // derefine 
+        }
+      }
+    }
+  }
+
+
 
 
   // Refine based on proximity to remap zone
