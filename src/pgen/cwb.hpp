@@ -14,8 +14,15 @@
 #include "../athena.hpp"
 #include "../athena_arrays.hpp"
 
+// Coordinate systems
 #define CART 0
 #define CYL  1
+// Memory locations
+#define CLOC 0  // Scalar memory location for wind "colour"
+#define ALOC 1  // Scalar memory location for grain radius, a (cm)
+#define ZLOC 2  // Scalar memory location for dust to mass ratio, z
+// Math macros
+#define CUBE(x) ( (x) * (x) * (x) )  // Fast cube of a value
 
 //! \class Star
 //  \brief Class used to describe a star in a CWB problem
@@ -41,6 +48,8 @@ class Star {
     int  scal;       // Identifying scalar, 1 for WR wind, 0 for OB
     // Functions
     int Init(ParameterInput *pin , std::string id, int scal_id);
+    // Diagnostics
+    int ncellsremapped;
 };
 
 int Star::Init(ParameterInput *pin, std::string id, int scal_id){
@@ -142,7 +151,6 @@ int CoolCurve::Init(std::string coolCurveFileName) {
   // Convert log(T) to T
   for (int n = 0; n < temp.size(); n++) {
     temp[n] = pow(10.0,temp[n]);
-    printf("%.3e %.3e\n",temp[n],lambda[n]);
   }
 
   // Compare lengths of vectors, if they are not the same, import has failed

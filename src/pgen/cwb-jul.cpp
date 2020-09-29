@@ -49,19 +49,21 @@
 #include "../scalars/scalars.hpp"   // JMP: needed for scalars
 
 bool cool, dust;
-Real gmma1;
+
+Real initialDustToGasMassRatio;
+Real initialGrainRadiusMicrons;
+
 Real mass1, mass2;
 Real mdot1, mdot2, vinf1, vinf2;
+Real remapRadius1, remapRadius2;
 Real xpos1, xpos2, ypos1, ypos2, zpos1, zpos2;
 Real xvel1, xvel2, yvel1, yvel2, zvel1, zvel2;
-Real eta, rob;
-Real dsep;    // current stellar separation
-Real dsep0;   // initial stellar separation
+
 Real period;  // orbit period (s)  
 Real phaseoff;// phase offset of orbit (from periastron) 
 Real ecc;     // orbit eccentricity
-Real tmin,tmax;
-Real dustToGasMassRatio;
+
+Real tmin,tmax; // min/max temperature allowed on grid
 
 int G0_level = 0;
 
@@ -73,9 +75,11 @@ const Real boltzman = 1.380658e-16;
 const Real massh = 1.67e-24;
 
 // User defined constants
-const Real grainRadiusMicrons = 0.1;
+const Real minimumDustToGasMassRatio = 1.0e-6;
+const Real minimumGrainRadiusMicrons = 0.01;
 const Real grainBulkDensity = 3.0;                       // (g/cm^3)
 const Real Twind = 1.0e4;                                // K
+const Real avgmass = 1.0e-24;     // g
 
 
 // Structure to store cooling curve data
@@ -87,30 +91,37 @@ struct coolingCurve{
 };
 
 // JMP prototypes
-void adjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,AthenaArray<Real> &dei,AthenaArray<Real> &cons);
+void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons);
 Real DustCreationRateInWCR(MeshBlock *pmb, int iout);
-void evolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
-void orbit_calc(Real t);
-void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons, const Real dx);
-void RemapWinds(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
+void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
+//void FixTemperature(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
+//                  const AthenaArray<Real> &bcc, AthenaArray<Real> &cons);
+void OrbitCalc(Real t);
+void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
                   const AthenaArray<Real> &bcc, AthenaArray<Real> &cons);
-void FixTemperature(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
-                  const AthenaArray<Real> &bcc, AthenaArray<Real> &cons);
+void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
 int RefinementCondition(MeshBlock *pmb);
-void restrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,AthenaArray<Real> &dei,const AthenaArray<Real> &cons);
+void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,Real gmma1,AthenaArray<Real> &dei,const AthenaArray<Real> &cons);
+
 
 //========================================================================================
 //! \fn void Mesh::InitUserMeshData(ParameterInput *pin)
 //  \brief Function to initialize problem-specific data in mesh class.  Can also be used
 //  to initialize variables which are global to (and therefore can be passed to) other
-//  functions in this file.  Called in Mesh constructor.
+//  functions in this file.  Called in Mesh constructor. Also called when restarting.
 //========================================================================================
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
+  //std::cout << "[Mesh::InitUserMeshData]\n";
+  
   mdot1 = pin->GetReal("problem","mdot1");
   mdot2 = pin->GetReal("problem","mdot2");
   vinf1 = pin->GetReal("problem","vinf1");
   vinf2 = pin->GetReal("problem","vinf2");
+
+  remapRadius1 = pin->GetReal("problem","remapRadius1");
+  remapRadius2 = pin->GetReal("problem","remapRadius2");
+  
   xpos1 = pin->GetReal("problem","xpos1");
   ypos1 = pin->GetReal("problem","ypos1");
   zpos1 = pin->GetReal("problem","zpos1");
@@ -139,53 +150,56 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     std::cout << "dust value not recognized: " << dust << "; Aborting!\n";
     exit(EXIT_SUCCESS);
   }
-  if (dust && NSCALARS < 2){
+  if (dust && NSCALARS < 3){
+    // Scalars are: 0 = wind colour
+    //              1 = dust to gas mass ratio
+    //              2 = dust grain radius (microns)
     std::cout << "Not enough scalars for dust modelling. NSCALARS = " << NSCALARS << ". Aborting!\n";
     exit(EXIT_SUCCESS);
+  }
+  if (dust){
+    initialDustToGasMassRatio = pin->GetReal("problem","initialDustToGasMassRatio");
+    initialGrainRadiusMicrons = pin->GetReal("problem","initialGrainRadiusMicrons");
   }
 
   mdot1 *= Msol/yr;
   mdot2 *= Msol/yr;
 
   // Note: it is only possible to have one source functions enrolled by the user.
-  EnrollUserExplicitSourceFunction(RemapWinds);
+  EnrollUserExplicitSourceFunction(PhysicalSources);
 
   if (adaptive==true)
       EnrollUserRefinementCondition(RefinementCondition);  
 
   // Add a user-defined global output (see https://github.com/PrincetonUniversity/athena-public-version/wiki/Outputs)
-  AllocateUserHistoryOutput(1);
-  EnrollUserHistoryOutput(0, DustCreationRateInWCR, "dmdustdt_WCR");
+  if (dust){
+    AllocateUserHistoryOutput(1);
+    EnrollUserHistoryOutput(0, DustCreationRateInWCR, "dmdustdt_WCR");
+  }
   
+  // No mesh blocks exist at this point...
   return;
 }
 
 //========================================================================================
 //! \fn void MeshBlock::ProblemGenerator(ParameterInput *pin)
-//  \brief Problem Generator for the CWB test
+//  \brief Problem Generator for the CWB test. 
+//         This is not called during a restart, so do not put any important stuff in here.
 //========================================================================================
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
+  //std::cout << "[MeshBlock::ProblemGenerator]\n";
+  
   Real gmma  = peos->GetGamma();
-  gmma1 = gmma - 1.0;
-
-  Real avgmass = 1.0e-24;     // g
-
-  dustToGasMassRatio = 0.01;
-    
-  dsep = std::sqrt(std::pow(xpos1 - xpos2,2) + std::pow(ypos1 - ypos2,2) + std::pow(zpos1 - zpos2,2));
-  eta = mdot2*vinf2/(mdot1*vinf1);                   // wind mtm ratio
-  rob = (std::sqrt(eta)/(1.0 + std::sqrt(eta)))*dsep;//distance of stagnation point from star 1 (distance from star 0 is rwr)
-
-  orbit_calc(pmy_mesh->time);
+  Real gmma1 = gmma - 1.0;
+  
+  Real dsep = std::sqrt(std::pow(xpos1 - xpos2,2) + std::pow(ypos1 - ypos2,2) + std::pow(zpos1 - zpos2,2));
+  Real eta = mdot2*vinf2/(mdot1*vinf1);                   // wind mtm ratio
+  Real rob = (std::sqrt(eta)/(1.0 + std::sqrt(eta)))*dsep;//distance of stagnation point from star 1 (distance from star 0 is rwr)
+  OrbitCalc(pmy_mesh->time);
   
   // Map on wind 1
   Real xmaxst1 = xpos1 + dsep - rob; // maximum x-extent of wind1
-
-  //std::cout << "time = " << pmy_mesh->time << "; xpos1 = " << xpos1 << "; ypos1 = " << ypos1 << "; zpos1 = " << zpos1 << "; xpos2 = " << xpos2 << "; ypos2 = " << ypos2 << "; zpos2 = " << zpos2 << "; xmaxst1 = " << xmaxst1 << "\n";
-  //std::cout << "xvel1 = " << xvel1 << "; yvel1 = " << yvel1 << "; xvel2 = " << xvel2 << "; yvel2 = " << yvel2 << "\n";
-  //exit(EXIT_SUCCESS);
-
   for (int k=ks; k<=ke; k++) {
     Real zc = pcoord->x3v(k) - zpos1;
     Real zc2 = zc*zc;
@@ -218,7 +232,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
               pscalars->s(0,k,j,i) = rho;
             }
 	    if (dust){
-              pscalars->s(1,k,j,i) = dustToGasMassRatio*rho;
+              pscalars->s(1,k,j,i) = initialDustToGasMassRatio*rho;
+              pscalars->s(2,k,j,i) = initialGrainRadiusMicrons*rho;
 	    }
 	  }
         } else if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) { // RPZ
@@ -237,7 +252,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
               pscalars->s(0,k,j,i) = rho;
             }
 	    if (dust){
-              pscalars->s(1,k,j,i) = dustToGasMassRatio*rho;
+              pscalars->s(1,k,j,i) = initialDustToGasMassRatio*rho;
+              pscalars->s(2,k,j,i) = initialGrainRadiusMicrons*rho;
 	    }
 	  }	  
         }
@@ -274,10 +290,12 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             phydro->u(IM2,k,j,i) = rho*u2;
             phydro->u(IM3,k,j,i) = rho*u3;
             phydro->u(IEN,k,j,i) = pre/gmma1 + 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	    //std::cout << "Initial map: Twind = " << Twind << "; vinf = " << vinf2 << "\n";
-	    //exit(EXIT_SUCCESS);
+	    if (NSCALARS > 0) {
+              pscalars->s(0,k,j,i) = 0.0;
+            }
 	    if (dust){
-              pscalars->s(1,k,j,i) = dustToGasMassRatio*rho;
+              pscalars->s(1,k,j,i) = initialDustToGasMassRatio*rho;
+              pscalars->s(2,k,j,i) = initialGrainRadiusMicrons*rho;
 	    }
 	  }
         } else if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) { // RPZ
@@ -292,15 +310,16 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
             phydro->u(IM2,k,j,i) = rho*u2;
             phydro->u(IM3,k,j,i) = rho*u3;
             phydro->u(IEN,k,j,i) = pre/gmma1 + 0.5*rho*vinf2*vinf2;	    
+	    if (NSCALARS > 0) {
+              pscalars->s(0,k,j,i) = 0.0;
+            }
 	    if (dust){
-              pscalars->s(1,k,j,i) = dustToGasMassRatio*rho;
+              pscalars->s(1,k,j,i) = initialDustToGasMassRatio*rho;
+              pscalars->s(2,k,j,i) = initialGrainRadiusMicrons*rho;
 	    }
 	  }	  
         }
 	
-	if (NSCALARS > 0) {
-          pscalars->s(0,k,j,i) = 0.0;
-        }
 
       }
     }
@@ -310,32 +329,31 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 }
 
 
+//========================================================================================
+//! \fn void Mesh::UserWorkAfterLoop(ParameterInput *pin)
+// JMP: This is called after the end of all of the hydro steps (i.e. just before the simulation exits)
+//========================================================================================
+void Mesh::UserWorkAfterLoop(ParameterInput *pin) {
+  // Cycle over all MeshBlocks
+  //MeshBlock *pmb = pblock;
+  //while (pmb != nullptr) {
+  //  pmb = pmb->next;
+  //}
+  return;
+}
+
 
 //========================================================================================
-//! \fn void MeshBlock::RemapWinds(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
-//		const AthenaArray<Real> &bcc, AthenaArray<Real> &cons)
-//  \brief Remap winds
-//  NOTE: JMP 11/08/20 - The wind passive scalar for the primary stays within 3% of 1.0.
-//                       Therefore use 0.5 to distinguish between primary and secondary wind material.
+//! \fn void MeshBlock::UserWorkInLoop()
+//  \brief Function called once every time step for user-defined work.
 //========================================================================================
-void RemapWinds(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
-		const AthenaArray<Real> &bcc, AthenaArray<Real> &cons){
+void MeshBlock::UserWorkInLoop() {
 
-  Real g = pmb->peos->GetGamma();
-  gmma1 = g - 1.0;
-
-  Real avgmass = 1.0e-24;     // g
-  
-  int remapi = 10;
-  Real dx = pmb->pcoord->dx1v(0);
-  Real remap_radius = Real(remapi)*dx; //1.0e11;
-
-  // The following doesn't remap the winds properly...
-  //Real remap_radius = 3.75e12;
-  //int remapi = int(remap_radius/10.0);
+  Real gmma  = peos->GetGamma();
+  Real gmma1 = gmma - 1.0;
 
   // Calculate the stellar positions
-  orbit_calc(time);  
+  OrbitCalc(pmy_mesh->time);  
   Real xpos[2]={xpos1,xpos2};
   Real ypos[2]={ypos1,ypos2};
   Real zpos[2]={zpos1,zpos2};
@@ -344,32 +362,37 @@ void RemapWinds(MeshBlock *pmb, const Real time, const Real dt, const AthenaArra
   Real mdot[2]={mdot1,mdot2};
   Real vinf[2]={vinf1,vinf2};
   Real scalar[2]={1.0,0.0};
-  
+  Real remapRadius[2] = {remapRadius1,remapRadius2};
+
+  Real dx = pcoord->dx1v(0);
+  int remapi[2] = {int(remapRadius1/dx),int(remapRadius2/dx)};
+    
+  // Remap winds
   for (int nw = 0; nw < 2; ++nw){ // Loop over each wind
-    int istar = int((xpos[nw] - pmb->pcoord->x1f(0))/pmb->pcoord->dx1f(0));
-    int jstar = int((ypos[nw] - pmb->pcoord->x2f(0))/pmb->pcoord->dx2f(0));
-    int kstar = int((zpos[nw] - pmb->pcoord->x3f(0))/pmb->pcoord->dx3f(0));
-    int istl = std::max(pmb->is,istar-remapi-2);
-    int jstl = std::max(pmb->js,jstar-remapi-2);
-    int kstl = std::max(pmb->ks,kstar-remapi-2);
-    int istu = std::min(pmb->ie,istar+remapi+2);
-    int jstu = std::min(pmb->je,jstar+remapi+2);
-    int kstu = std::min(pmb->ke,kstar+remapi+2);
+    int istar = int((xpos[nw] - pcoord->x1f(0))/pcoord->dx1f(0));
+    int jstar = int((ypos[nw] - pcoord->x2f(0))/pcoord->dx2f(0));
+    int kstar = int((zpos[nw] - pcoord->x3f(0))/pcoord->dx3f(0));
+    int istl = std::max(is,istar-remapi[nw]-2);
+    int jstl = std::max(js,jstar-remapi[nw]-2);
+    int kstl = std::max(ks,kstar-remapi[nw]-2);
+    int istu = std::min(ie,istar+remapi[nw]+2);
+    int jstu = std::min(je,jstar+remapi[nw]+2);
+    int kstu = std::min(ke,kstar+remapi[nw]+2);
     if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) {
-      jstl = pmb->js; jstu = pmb->je;
+      jstl = js; jstu = je;
     }
     for (int k=kstl; k<=kstu; k++) {
-      Real zc = pmb->pcoord->x3v(k) - zpos[nw];
+      Real zc = pcoord->x3v(k) - zpos[nw];
       Real zc2 = zc*zc;
       for (int j=jstl; j<=jstu; j++) {
-        Real yc = pmb->pcoord->x2v(j) - ypos[nw];
+        Real yc = pcoord->x2v(j) - ypos[nw];
         Real yc2 = yc*yc;
         for (int i=istl; i<=istu; i++) {
-          Real xc = pmb->pcoord->x1v(i) - xpos[nw];
+          Real xc = pcoord->x1v(i) - xpos[nw];
 	  Real xc2 = xc*xc;
   	  Real r2 = xc2 + yc2 + zc2;
 	  Real r = std::sqrt(r2);
-          if (r < remap_radius) {
+          if (r < remapRadius[nw]) {
 	    Real xy = xy = std::sqrt(xc2 + yc2);
 	    Real sinphi = xy/r;
 	    Real cosphi = zc/r;
@@ -387,23 +410,23 @@ void RemapWinds(MeshBlock *pmb, const Real time, const Real dt, const AthenaArra
 	      u2 = 0.0;
 	      u3 = vinf1*cosphi;
 	    }
-	    cons(IDN,k,j,i) = rho;
-            cons(IM1,k,j,i) = rho*u1;
-            cons(IM2,k,j,i) = rho*u2;
-            cons(IM3,k,j,i) = rho*u3;
-            cons(IEN,k,j,i) = pre/gmma1 + 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-
+	    //std::cout << "nw = " << nw << "; r = " << r << "; rho = " << rho << "\n";
+	    phydro->u(IDN,k,j,i) = rho;
+            phydro->u(IM1,k,j,i) = rho*u1;
+            phydro->u(IM2,k,j,i) = rho*u2;
+            phydro->u(IM3,k,j,i) = rho*u3;
+            phydro->u(IEN,k,j,i) = pre/gmma1 + 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
 	    
-	    // Set passive scalars (setting pscalars->r does nothing)
+	    // Set passive scalars
 	    if (NSCALARS > 0) {
 	      // wind "colour"
-              pmb->pscalars->s(0,k,j,i) = scalar[nw]*rho;
+              pscalars->s(0,k,j,i) = scalar[nw]*rho;
             }
 	    if (dust){
-              pmb->pscalars->s(1,k,j,i) = dustToGasMassRatio*rho;
+              pscalars->s(1,k,j,i) = initialDustToGasMassRatio*rho;
+              pscalars->s(2,k,j,i) = initialGrainRadiusMicrons*rho;
 	    }
-	    
-	    
+	    	    
 	  }
 	}
       }
@@ -411,59 +434,42 @@ void RemapWinds(MeshBlock *pmb, const Real time, const Real dt, const AthenaArra
   }
 
 
-  
-  for (int k=pmb->ks; k<=pmb->ke; ++k) {
-    for (int j=pmb->js; j<=pmb->je; ++j) {
-      for (int i=pmb->is; i<=pmb->ie; ++i) {
-
-	/*
-	// This is worse than just letting it be adiabatic...
-        Real temp = prim(IEN,k,j,i)*avgmass/(prim(IDN,k,j,i)*boltzman);
-	if (temp < Twind){
-	  Real rho = prim(IDN,k,j,i);
-	  Real u1 = prim(IM1,k,j,i);
-	  Real u2 = prim(IM2,k,j,i);
-	  Real u3 = prim(IM3,k,j,i);
-	  Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	  Real pre = (rho/avgmass)*boltzman*Twind;
-          cons(IEN,k,j,i) = ke + pre/gmma1;
-	}
-	*/
-
-
-	/*
-	// This doesn't seem to make the wind temperature any better when using PPM...
-	// When using PLM it seems to make it a little worse. Therefore don't use it.
-        Real rho = cons(IDN,k,j,i);
-	Real u1  = cons(IM1,k,j,i)/rho; 
-	Real u2  = cons(IM2,k,j,i)/rho; 
-	Real u3  = cons(IM3,k,j,i)/rho;
-	Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	Real ie = cons(IEN,k,j,i) - ke;
-	Real pre = gmma1*ie;
-	Real temp = pre*avgmass/(rho*boltzman);
-	if (temp < Twind){
-	  pre = (rho/avgmass)*boltzman*Twind;
-	  cons(IEN,k,j,i) = ke + pre/gmma1;
-	}
-	*/
+  // Limit wind colour
+  if (NSCALARS > 0) {  
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=is; i<=ie; ++i) {
+	  // wind "colour"
+          pscalars->s(0,k,j,i) = std::min(std::max(pscalars->s(0,k,j,i),0.0),1.0);
+        }
       }
     }
   }
 
 
-  if (cool) radiateHeatCool(pmb,dt,cons,dx);
-  if (dust) evolveDust(pmb,dt,cons);
   
   return;
 }
 
 
 //========================================================================================
-//! \fn void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
+//! \fn void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
+//		const AthenaArray<Real> &bcc, AthenaArray<Real> &cons)
+//  \brief Physical source terms
+//========================================================================================
+void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
+		const AthenaArray<Real> &bcc, AthenaArray<Real> &cons){
+
+  if (cool) RadiateHeatCool(pmb,dt,cons);
+  if (dust) EvolveDust(pmb,dt,cons);
+  return;
+}
+
+//========================================================================================
+//! \fn void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
 //  \brief Calculating radiative heating and cooling
 //========================================================================================
-void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons, const Real dx){
+void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
   const int ncool = 1; // number of cooling curves
 
@@ -471,10 +477,8 @@ void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons, con
   static bool firstHeatCool = true;
   bool restrictUnresolvedCooling = true;
 
-  Real g = pmb->peos->GetGamma();
-  gmma1 = g - 1.0;
-
-  Real avgmass = 1.0e-24; // g
+  Real gmma  = pmb->peos->GetGamma();
+  Real gmma1 = gmma - 1.0;
 
   tmin = Twind;
   tmax = 3.0e9;
@@ -486,8 +490,7 @@ void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons, con
   double totEdotGas = 0.0;
   double totEdotDust = 0.0;
 
-  if (firstHeatCool)
-  {
+  if (firstHeatCool){
     // Specify the cooling curves and the number of temperature bins.
     // The first cooling curve should extend to the same or lower temperature
     // than the second.
@@ -538,19 +541,17 @@ void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons, con
     //}
 
     firstHeatCool = false;
-    if (Globals::my_rank == 0)
+    if (Globals::my_rank == 0){
       std::cout << "Finished firstHeatCool!\n";
+    }
   }
 
   AthenaArray<Real> dei(pmb->ke+1,pmb->je+1,pmb->ie+1);
   
   // Now loop over cells, calculating the heating/cooling rate
-  for (int k = pmb->ks; k <= pmb->ke; ++k)
-  {
-    for (int j = pmb->js; j <= pmb->je; ++j)
-    {
-      for (int i = pmb->is; i <= pmb->ie; ++i)
-      {
+  for (int k = pmb->ks; k <= pmb->ke; ++k){
+    for (int j = pmb->js; j <= pmb->je; ++j){
+      for (int i = pmb->is; i <= pmb->ie; ++i){
 
         Real rho = cons(IDN, k, j, i);
         Real u1 = cons(IM1, k, j, i) / rho;
@@ -577,19 +578,17 @@ void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons, con
         ////ne = 1.2*nH;                          // electron number density
 #endif
 
-        if (std::isnan(tempold) || std::isinf(tempold))
-        {
+        if (std::isnan(tempold) || std::isinf(tempold)){
           std::cout << "tempold is a NaN or an Inf. Aborting!\n";
           exit(EXIT_SUCCESS);
         }
 
-        if (temp < 1.5 * Twind)
-        { // this should prevent wasting time in the unshocked gas
+        if (temp < 1.5 * Twind){
+          // this should prevent wasting time in the unshocked gas
           // set temp to Twind
           temp = Twind;
         }
-        else
-        {
+        else{       
           double dtint = 0.0;
           double lcool = 0.0;
           while (dtint < dt)
@@ -599,8 +598,8 @@ void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons, con
 
             // Loop over all cooling curves (e.g. gas plus dust)
             double lambda_cool_nc[ncool] = {0.0};
-            for (int nc = 0; nc < ncool; ++nc)
-            {
+            for (int nc = 0; nc < ncool; ++nc){
+            
               double lambda_cool = 0.0;
               // If temp <= 1.1*te[0] there is zero cooling. We use te[0] instead of tmin,
               // because if tmin < te[0] it won't trigger if t > tmin but < te[0].
@@ -746,10 +745,10 @@ void radiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons, con
   //}
 
   // Restrict cooling at unresolved interfaces
-  if (restrictUnresolvedCooling) restrictCool(pmb->is,pmb->ie,pmb->js,pmb->je,pmb->ks,pmb->ke,pmb->pmy_mesh->ndim,dei,cons);
+  if (restrictUnresolvedCooling) RestrictCool(pmb->is,pmb->ie,pmb->js,pmb->je,pmb->ks,pmb->ke,pmb->pmy_mesh->ndim,gmma1,dei,cons);
 
   // Adjust pressure due to cooling
-  adjustPressureDueToCooling(pmb->is,pmb->ie,pmb->js,pmb->je,pmb->ks,pmb->ke,dei,cons);
+  AdjustPressureDueToCooling(pmb->is,pmb->ie,pmb->js,pmb->je,pmb->ks,pmb->ke,gmma1,dei,cons);
 }
 
 //========================================================================================
@@ -761,9 +760,7 @@ void FixTemperature(MeshBlock *pmb, const Real time, const Real dt, const Athena
 		const AthenaArray<Real> &bcc, AthenaArray<Real> &cons){
 
   Real g = pmb->peos->GetGamma();
-  gmma1 = g - 1.0;
-
-  Real avgmass = 1.0e-24;     // g
+  Real gmma1 = g - 1.0;
 
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     for (int j=pmb->js; j<=pmb->je; ++j) {
@@ -821,7 +818,6 @@ int RefinementCondition(MeshBlock *pmb)
   //exit(EXIT_SUCCESS);
   
   Real epsilon = 0.33;
-  Real avgmass = 1.0e-24;
 
   // Mesh contains: root_level, max_level, current_level;
   static bool first = true;
@@ -837,8 +833,10 @@ int RefinementCondition(MeshBlock *pmb)
 
   Real stagx, stagy, stagz;
   Real eta = mdot2*vinf2/(mdot1*vinf1);                   // wind mtm ratio
+  Real dsep = std::sqrt(std::pow(xpos1 - xpos2,2) + std::pow(ypos1 - ypos2,2) + std::pow(zpos1 - zpos2,2));
+  Real rob = (std::sqrt(eta)/(1.0 + std::sqrt(eta)))*dsep;
   Real fracrob = 1.0 - 1.0/(1.0 + std::sqrt(eta));
-
+  
   if (std::strcmp(COORDINATE_SYSTEM, "cartesian") == 0) {	
     stagx = xpos2 - fracrob*(xpos2 - xpos1);
     stagy = ypos2 - fracrob*(ypos2 - ypos1);
@@ -1014,7 +1012,7 @@ int RefinementCondition(MeshBlock *pmb)
 
 
 // Calculate the position and velocities of the stars based on the model time.
-void orbit_calc(Real t){
+void OrbitCalc(Real t){
 
   float xdist,ydist,zdist;
   double time_offset,torbit,phase,phi,E,dE,cosE,sinE;
@@ -1102,12 +1100,12 @@ void orbit_calc(Real t){
   xvel2 =  v2*cosang;
   
   // Update dsep and rob
-  xdist = xpos1 - xpos2;
-  ydist = ypos1 - ypos2;
-  zdist = zpos1 - zpos2;
-  dsep = std::sqrt(xdist*xdist + ydist*ydist + zdist*zdist);
-  eta = mdot2*vinf2/(mdot1*vinf1);                   // wind mtm ratio
-  rob = (1.0 - 1.0/(1.0 + std::sqrt(eta)))*dsep;     //distance of stagnation point from star 1 (distance from star 0 is rwr)
+  //xdist = xpos1 - xpos2;
+  //ydist = ypos1 - ypos2;
+  //zdist = zpos1 - zpos2;
+  //dsep = std::sqrt(xdist*xdist + ydist*ydist + zdist*zdist);
+  //eta = mdot2*vinf2/(mdot1*vinf1);                   // wind mtm ratio
+  //rob = (1.0 - 1.0/(1.0 + std::sqrt(eta)))*dsep;     //distance of stagnation point from star 1 (distance from star 0 is rwr)
 ;
   
   //std::cout << "xpos1 = " << xpos1 << "; xpos2 = " << xpos2 << "; ypos1 = " << ypos1 << "; ypos2 = " << ypos2 << "; zpos1 = " << zpos1 << "; zpos2 = " << zpos2 << "\n";
@@ -1129,7 +1127,7 @@ void orbit_calc(Real t){
  *   \version 1.0-stable (Evenstar):
  *   \date Last modified: 13.09.11 (JMP)
  */
-void restrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,AthenaArray<Real> &dei,const AthenaArray<Real> &cons){
+void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,Real gmma1,AthenaArray<Real> &dei,const AthenaArray<Real> &cons){
 
   AthenaArray<Real> pre(ke+1,je+1,ie+1);
   AthenaArray<Real> scrch(ie+1), dis(ie+1), drhox(ie+1), drhoy(ie+1), drhoz(ie+1);
@@ -1212,9 +1210,7 @@ void restrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,AthenaArray<R
  *   \version 1.0-stable (Evenstar):
  *   \date Last modified: 13.09.11 (JMP)
  */
-void adjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,AthenaArray<Real> &dei,AthenaArray<Real> &cons){
-
-  Real avgmass = 1.0e-24;     // g
+void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons){
   
   for (int k = ks; k <= ke; k++){
     for (int j = js; j <= je; j++){
@@ -1267,17 +1263,15 @@ void adjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Athena
 // *** NOTE: In this and DustCreationRateInWCR() I need to replace grainRadius
 //           with an advected scalar value...  ****
 //
-void evolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
+void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
   const Real dens_g = grainBulkDensity;               // (g/cm^3)
-  const Real grainRadius = grainRadiusMicrons*1.0e-4; // cm
-  const Real a2 = grainRadius*grainRadius;
-  const Real massD = (4.0/3.0)*pi*std::pow(grainRadius,3)*dens_g; // grain mass (g)
   const Real A = 12.0;    // Carbon dust grains
   const Real eps_a = 0.1; // probability of sticking
 
-  Real avgmass = 1.0e-24;     // g
-
+  Real gmma  = pmb->peos->GetGamma();
+  Real gmma1 = gmma - 1.0;
+  
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     Real zc = pmb->pcoord->x3v(k) - zpos1;
     Real zc2 = zc*zc;
@@ -1295,7 +1289,11 @@ void evolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
         Real ntot = 1.1*nH;                        // total nucleon number density
         Real z = pmb->pscalars->s(1,k,j,i)/rho;    // dust mass fraction
         Real rhod = rho*z;                         // dust mass density (g/cm^3)
-        Real nD = rhod/massD;                      // grain number density (cm^-3)
+
+        Real a = (pmb->pscalars->s(2,k,j,i)/rho)*1.0e-4; // grain radius (cm)
+        Real massD = (4.0/3.0)*pi*std::pow(a,3)*dens_g; // grain mass (g)
+
+	Real nD = rhod/massD;                      // grain number density (cm^-3)
 
 	Real u1  = cons(IM1,k,j,i)/rho; 
 	Real u2  = cons(IM2,k,j,i)/rho; 
@@ -1317,17 +1315,19 @@ void evolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
 	
 	Real rhod_dot = 0.0;
-	
+	Real dadt = 0.0;
 	
 	if (temp > 1.0e6 && z > 0.0){
 	  // Dust thermal sputtering
-	  rhod_dot = -1.33e-17*dens_g*a2*ntot*nD; // dust destruction rate (g cm^-3 s^-1)
+	  Real tau_d = 3.156e17*a/ntot;            // grain destruction time (s)
+	  dadt = -a/tau_d;
+	  rhod_dot = -1.33e-17*dens_g*a*a*ntot*nD; // dust destruction rate (g cm^-3 s^-1)
 	}
 	else if (temp < 1.4e4){
 	  // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
 	  Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
-	  Real dadt = 0.25*eps_a*rho*wa/dens_g;
-	  rhod_dot = 4.0*pi*a2*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+	  dadt = 0.25*eps_a*rho*wa/dens_g;
+	  rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
 	  //if (rho > 2.0*rho_smooth && col > 0.5){
 	    // In cool WCR
 	    //std::cout << "Growing grains inside WCR...\n";
@@ -1338,12 +1338,18 @@ void evolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 	}
 	if (rhod_dot != 0.0){
 	  Real drhod = rhod_dot*dt;
-	  Real rhodnew = std::max(0.0,rhod + drhod);    // new dust density
-	  Real rhonew = rho + drhod;                    // new gas  density
+	  Real rhodnew = std::max(minimumDustToGasMassRatio*rho,rhod + drhod);    // new dust density
+	  Real rhonew = rho + (rhod - rhodnew);                                   // new gas  density (preserving total mass)
 	  cons(IDN,k,j,i) = rhonew;
+	  // Update the conserved wind colour (as the gas density may have changed)
+	  pmb->pscalars->s(0,k,j,i) = col*rhonew;
+	  // Update the dust to gas mass ratio
 	  pmb->pscalars->r(1,k,j,i) = rhodnew/rhonew;
-	  pmb->pscalars->r(1,k,j,i) = std::min(1.0,std::max(0.0,pmb->pscalars->r(1,k,j,i)));
 	  pmb->pscalars->s(1,k,j,i) = pmb->pscalars->r(1,k,j,i)*rhonew;
+	  // Update the grain radius
+	  Real anew = std::max(minimumGrainRadiusMicrons,(a + dadt*dt)/1.0e-4); // (microns)
+	  pmb->pscalars->r(2,k,j,i) = anew;
+	  pmb->pscalars->s(2,k,j,i) = anew*rhonew;
 	}
       }
     }
@@ -1356,18 +1362,12 @@ void evolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
 Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
   const Real dens_g = grainBulkDensity;               // (g/cm^3)
-  const Real grainRadius = grainRadiusMicrons*1.0e-4; // cm
-  const Real a2 = grainRadius*grainRadius;
-  const Real massD = (4.0/3.0)*pi*std::pow(grainRadius,3)*dens_g; // grain mass (g)
   const Real A = 12.0;    // Carbon dust grains
   const Real eps_a = 0.1; // probability of sticking
-
-  Real avgmass = 1.0e-24;     // g
-
-  const int remapi = 10;
-  Real dx = pmb->pcoord->dx1v(0);
-  Real remap_radius = Real(remapi)*dx; 
   
+  Real gmma  = pmb->peos->GetGamma();
+  Real gmma1 = gmma - 1.0;
+
   AthenaArray<Real>& cons = pmb->phydro->u;
   
   Real dmdustdt_WCR = 0.0;
@@ -1388,7 +1388,11 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
         Real ntot = 1.1*nH;                        // total nucleon number density
         Real z = pmb->pscalars->s(1,k,j,i)/rho;    // dust mass fraction
         Real rhod = rho*z;                         // dust mass density (g/cm^3)
-        Real nD = rhod/massD;                      // grain number density (cm^-3)
+
+        Real a = (pmb->pscalars->s(2,k,j,i)/rho)*1.0e-4; // grain radius (cm)
+        Real massD = (4.0/3.0)*pi*std::pow(a,3)*dens_g; // grain mass (g)
+
+	Real nD = rhod/massD;                      // grain number density (cm^-3)
 
 	Real u1  = cons(IM1,k,j,i)/rho; 
 	Real u2  = cons(IM2,k,j,i)/rho; 
@@ -1415,9 +1419,9 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
 	  // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
 	  Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
 	  Real dadt = 0.25*eps_a*rho*wa/dens_g;
-	  rhod_dot = 4.0*pi*a2*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+	  rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
 	  Real r = std::sqrt(r2);
-	  if (rho > 2.0*rho_smooth && col > 0.5 && r > remap_radius){
+	  if (rho > 2.0*rho_smooth && col > 0.5 && r > remapRadius1){
 	    // In cool WCR
             Real vol = pmb->pcoord->GetCellVolume(k, j, i);
 	    dmdustdt_WCR += rhod_dot*vol;

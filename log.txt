@@ -1,0 +1,187 @@
+bench-l1-g8
+
+Setup complete, entering main loop...
+
+cycle=0 time=0.0000000000000000e+00 dt=1.9393268147282942e+02
+cycle=10 time=1.7820202783338548e+03 dt=1.7132331155550150e+02
+cycle=20 time=3.4353340142989255e+03 dt=1.5913315342774155e+02
+cycle=30 time=4.9868513220922978e+03 dt=1.4905171740541405e+02
+cycle=40 time=6.3959969566082673e+03 dt=1.2873965677928231e+02
+cycle=50 time=7.6490690268556027e+03 dt=1.2375890256831933e+02
+cycle=60 time=8.8792991013004612e+03 dt=1.2299672334759771e+02
+cycle=70 time=1.0110141558657462e+04 dt=1.2309777984081570e+02
+cycle=80 time=1.1328924188460542e+04 dt=1.2024003156528087e+02
+cycle=90 time=1.2516503097923302e+04 dt=1.1630540214646864e+02
+cycle=100 time=1.3666612717038537e+04 dt=1.1321312083650150e+02
+
+Terminating on cycle limit
+time=1.3666612717038537e+04 cycle=100
+tlim=1.0000000000000000e+08 nlim=100
+
+Number of MeshBlocks = 13824; 0  created, 0 destroyed during this simulation.
+
+zone-cycles = 707788800
+cpu time used  = 4.1177999999999997e+02
+zone-cycles/cpu_second = 1.7188518140754774e+06
+bench-l1-g16
+
+Setup complete, entering main loop...
+
+cycle=0 time=0.0000000000000000e+00 dt=1.9393268147282942e+02
+cycle=10 time=1.6390445793478802e+03 dt=1.3761956395151117e+02
+cycle=20 time=2.9390333432316384e+03 dt=1.1798249810099109e+02
+cycle=30 time=4.0782101378228554e+03 dt=1.0614892085003554e+02
+cycle=40 time=5.1231146018884292e+03 dt=1.0409779952824141e+02
+cycle=50 time=6.1799029043656328e+03 dt=1.0737663745753389e+02
+cycle=60 time=7.2799958858936943e+03 dt=1.1275079940377530e+02
+cycle=70 time=8.3609693094597314e+03 dt=1.0229070689159924e+02
+cycle=80 time=9.3352028043898372e+03 dt=9.3307812016881456e+01
+cycle=90 time=1.0221413814554679e+04 dt=8.4702601292734556e+01
+cycle=100 time=1.1033108628658598e+04 dt=7.8740740289320939e+01
+
+Terminating on cycle limit
+time=1.1033108628658598e+04 cycle=100
+tlim=1.0000000000000000e+08 nlim=100
+
+Number of MeshBlocks = 1728; 0  created, 0 destroyed during this simulation.
+
+zone-cycles = 707788800
+cpu time used  = 1.8669000000000000e+02
+zone-cycles/cpu_second = 3.7912518078097380e+06
+bench-l1-g32
+
+Setup complete, entering main loop...
+
+cycle=0 time=0.0000000000000000e+00 dt=1.9393268147282942e+02
+cycle=10 time=1.6390445787717986e+03 dt=1.3761956397005378e+02
+cycle=20 time=2.9390333418818796e+03 dt=1.1798249825600556e+02
+cycle=30 time=4.0782101407612527e+03 dt=1.0614892187181593e+02
+cycle=40 time=5.1231146183144574e+03 dt=1.0409780160727799e+02
+cycle=50 time=6.1790138817880961e+03 dt=1.0710813934108774e+02
+cycle=60 time=7.2746995515324716e+03 dt=1.1227883508432272e+02
+cycle=70 time=8.3544660182223270e+03 dt=1.0235301545648640e+02
+cycle=80 time=9.3290541090497318e+03 dt=9.3223254563232800e+01
+cycle=90 time=1.0215221093822443e+04 dt=8.4810286128140532e+01
+cycle=100 time=1.1026108963925570e+04 dt=7.7039088150141836e+01
+
+Terminating on cycle limit
+time=1.1026108963925570e+04 cycle=100
+tlim=1.0000000000000000e+08 nlim=100
+
+Number of MeshBlocks = 216; 0  created, 0 destroyed during this simulation.
+
+zone-cycles = 707788800
+cpu time used  = 1.3299000000000001e+02
+zone-cycles/cpu_second = 5.3221204601849755e+06
+bench-l1-g64
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+
+Setup complete, entering main loop...
+
+cycle=0 time=0.0000000000000000e+00 dt=4.8469253281968044e+01
+cycle=10 time=1.5980186879612256e+02 dt=1.1278578620151240e+01
+cycle=20 time=2.7524936810805116e+02 dt=1.1705071951374171e+01
+bench-l3-g8
+bench-l3-g16
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+
+Setup complete, entering main loop...
+
+cycle=0 time=0.0000000000000000e+00 dt=4.8469918110922031e+01
+cycle=10 time=1.7121253339215161e+02 dt=1.2967850912924700e+01
+cycle=20 time=2.9653227227781605e+02 dt=1.0427103998201760e+01
+cycle=30 time=4.1321626414043357e+02 dt=1.1794579693800285e+01
+cycle=40 time=5.2762999176645087e+02 dt=1.1264624549213357e+01
+cycle=50 time=6.3795271773641821e+02 dt=1.0911099325294293e+01
+cycle=60 time=7.4736535817141180e+02 dt=1.0868986569387035e+01
+cycle=70 time=8.6003136818600785e+02 dt=1.1356699322332865e+01
+cycle=80 time=9.7228565408396105e+02 dt=1.0634109257989321e+01
+cycle=90 time=1.0804436946973049e+03 dt=1.0829668226012119e+01
+cycle=100 time=1.1910144514846575e+03 dt=1.0724138669286448e+01
+
+Terminating on cycle limit
+time=1.1910144514846575e+03 cycle=100
+tlim=1.0000000000000000e+08 nlim=100
+
+Number of MeshBlocks = 3870; 10633  created, 8491 destroyed during this simulation.
+
+zone-cycles = 1580191744
+cpu time used  = 4.9508999999999997e+02
+zone-cycles/cpu_second = 3.1917262396735949e+06
+bench-l3-g32
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+
+Setup complete, entering main loop...
+
+cycle=0 time=0.0000000000000000e+00 dt=4.8469253281968044e+01
+cycle=10 time=1.7450693296567769e+02 dt=1.2556965187415955e+01
+cycle=20 time=3.0147523307396057e+02 dt=1.2375900875851563e+01
+cycle=30 time=4.1949361983230057e+02 dt=1.1803256244170894e+01
+cycle=40 time=5.2898490748852475e+02 dt=1.1007633155952556e+01
+cycle=50 time=6.3980063699301411e+02 dt=1.0965009090577768e+01
+cycle=60 time=7.4743346006115769e+02 dt=1.0954112759911000e+01
+cycle=70 time=8.5775244357840677e+02 dt=1.1355557411417520e+01
+cycle=80 time=9.6987538258448808e+02 dt=1.1153726902785534e+01
+cycle=90 time=1.0816051620343715e+03 dt=1.0853723194206475e+01
+cycle=100 time=1.1919033688923112e+03 dt=1.1157921656645209e+01
+
+Terminating on cycle limit
+time=1.1919033688923112e+03 cycle=100
+tlim=1.0000000000000000e+08 nlim=100
+
+Number of MeshBlocks = 748; 2016  created, 1484 destroyed during this simulation.
+
+zone-cycles = 2469396480
+cpu time used  = 5.1780999999999995e+02
+zone-cycles/cpu_second = 4.7689238910024920e+06
+bench-l3-g64
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+
+Setup complete, entering main loop...
+
+cycle=0 time=0.0000000000000000e+00 dt=4.8469253281968044e+01
+bench-l6-g8
+bench-l6-g16
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+bench-l6-g32
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.
+bench-l6-g64
+### Warning in Mesh::Initialize
+The number of MeshBlocks increased more than twice during initialization.
+More computing power than you expected may be required.

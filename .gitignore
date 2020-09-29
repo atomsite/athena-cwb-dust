@@ -59,3 +59,7 @@ meshtest.dat
 
 # genhtml test case description format produced by gendesc
 *.desc
+
+# Personal data
+*.png
+*.mp4
