@@ -72,6 +72,7 @@ coolcurve = rkcoolcurve.dat
 orbit = true
 cool  = true
 dust  = true
+dust_cool = true
 
 # Orbital properties
 period       = 4.88e7

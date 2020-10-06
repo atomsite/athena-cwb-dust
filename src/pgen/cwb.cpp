@@ -55,7 +55,15 @@
 // Function declaration
 
 
-// CWB global namespace
+//  CWB global namespace
+//  - Globally accessible variables that are needed for the programme to work
+//    without passing a ridiculous number of variables through each function
+//  - These are typically constants, aside from certain properties within
+//    the WR and 
+//  - A copy is kept per CPU, all updating calculations are performed across
+//    all threads, this prevents race conditions for arising at a neglible cost
+//    to performance, especially when compared to the hydro loop as a whole
+
 namespace {
   // Define objects
   // Create star objects, see cwb.hpp
@@ -65,32 +73,32 @@ namespace {
   std::vector<Star*> Stars;
 
   // Create cooling curve class
-  CoolCurve CCurve;
+  CoolCurve CCurve;  // Object containing the cooling curve
   // Star orbital parameters
-  Real dsep;
-  Real eta;
-  Real rob;
-  Real rwr;
-  Real phase_offset;
-  Real period;
-  Real ecc;
+  Real dsep;          // Star orbital separation (cm)
+  Real eta;           // Wind momentum ratio, OB numerators
+  Real rob;           // OB distance from stagnation point (cm)
+  Real rwr;           // WR distnace from stagnation point (cm)
+  Real phase_offset;  // Orbital phase offset
+  Real period;        // Orbital period (s)
+  Real ecc;           // Orbital eccentricity
 
   // Dust variables
-  Real a_min;
-  Real z_min;
-  Real bulk_dens;
-  Real stick_eff;
-  Real nuc_temp;
+  Real a_min;      // Minimum grain size (cm)
+  Real z_min;      // Minimum dust-to-gas mass ratio
+  Real bulk_dens;  // Grain bulk density (g cm^-3)
+  Real stick_eff;  // Grain sticking efficiency (fraction)
+  Real nuc_temp;   // Grain nucleation temperature (K)
 
   // Refinement parameters
-  int G0_level = 0;
+  int G0_level = 0;  // Coarse cell leve, leave at zero for most things
 
   // Simulation parameters
-  int  remap         = 3;      // Remap radius in cell widths
-  bool orbit         = false;  // Turn on orbital dynamics
-  bool cool          = false;  // Turn on cooling
-  bool dust          = false;  // Turn on dust evolution
-  bool dust_cool     = false;  // Turn on dust cooling
+  int  remap     = 3;      // Remap radius in cell widths
+  bool orbit     = false;  // Turn on orbital dynamics
+  bool cool      = false;  // Turn on cooling
+  bool dust      = false;  // Turn on dust evolution
+  bool dust_cool = false;  // Turn on dust cooling
 
   // Simulation variables
   int coord; // Coordinate system, 0 for cartesian, 1 for cylindrical
@@ -184,93 +192,17 @@ void CalcOrbit(Real t) {
   return;
 }
 
-void ThermalRemap(MeshBlock *pmb, const Real dt,
-                  const AthenaArray<Real> &prim,
-                  AthenaArray<Real> &cons) {
+//! \fn RestrictCool()
+//  \brief Restrict the cooling rate at unresolved interfaces between hot 
+//         diffuse gas and cold dense gas.
+// 
+//   Replace deltaE with minimum of neighboring deltaEs at the interface.
+//   Updates dei, which is positive if the gas is cooling.
+// 
+//   \author Julian Pittard (Original version 13.09.11)
+//   \version 1.0-stable (Evenstar):
+//   \date Last modified: 13.09.11 (JMP)
 
-  // First, calculate the remap radius in CGS units, rather than cell widths
-  Real remap_radius = Real(remap) * pmb->pcoord->dx1v(0);
-
-  // As a meshblock is refined down to the appropriate level it
-  // needs to be in an adaptive mesh, this means that the mesh
-  // itself is ordered, therefore rather than looping over
-  // the entire mesh, only a cubic region around the remap zone
-  // is looped through.
-  // i/j/kstar: Closest index on axis to star position
-  // i/j/kstl:  "Lower" array to access
-  // i/j/kstu:  "Upper" array to access
-  
-  for (auto Star : Stars) {
-    int istar = int((Star->x[0] - pmb->pcoord->x1f(0))/pmb->pcoord->dx1f(0));
-    int jstar = int((Star->x[1] - pmb->pcoord->x2f(0))/pmb->pcoord->dx2f(0));
-    int kstar = int((Star->x[2] - pmb->pcoord->x3f(0))/pmb->pcoord->dx3f(0));
-    int istl = std::max(pmb->is,istar-remap-2);
-    int jstl = std::max(pmb->js,jstar-remap-2);
-    int kstl = std::max(pmb->ks,kstar-remap-2);
-    int istu = std::min(pmb->ie,istar+remap+2);
-    int jstu = std::min(pmb->je,jstar+remap+2);
-    int kstu = std::min(pmb->ke,kstar+remap+2);
-    // In the case of a cylindrical coordinate system, phi axis modified
-    if (coord == CYL) {
-      jstl = pmb->js;
-      jstu = pmb->je;
-    }
-
-    for (int k = kstl; k <= kstu; ++k) {
-      Real zc  = pmb->pcoord->x3v(k) - Star->x[2];
-      Real zc2 = SQR(zc);
-      for (int j = jstl; j <= jstu; ++j) {
-        Real yc  = pmb->pcoord->x2v(j) - Star->x[1];
-        Real yc2 = SQR(yc);
-        for (int i = istl; i <=istu; ++i) {
-          Real xc  = pmb->pcoord->x1v(i) - Star->x[0];
-          Real xc2 = SQR(xc);
-          // Calculate overall distance from star to 
-          Real r2  = xc2 + yc2 + zc2;
-          Real r   = std::sqrt(r2);
-
-          if (r < Star->remap_cgs) {
-            Real MDot = Star->mdot_cgs;
-            Real VInf = Star->vinf;
-            Real vol  = Star->remap_vol;
-
-            Real rhoDot  = MDot / vol;
-            Real mechLum = 0.5 * rhoDot * SQR(VInf);
-
-            cons(IDN,k,j,i) += rhoDot * dt;
-            cons(IEN,k,j,i) += mechLum * dt;
-          }
-        }
-      }
-    }
-  }
-  return;
-}
-
-void RemapWinds(AthenaArray<Real> &pcoord,
-                AthenaArray<Real> &phydro,
-                AthenaArray<Real> &pscalars,
-                Real is, Real ie,
-                Real js, Real je,
-                Real ks, Real ke) {
-
-  
-
-  return;
-}
-
-
-
-// /*!  \brief Restrict the cooling rate at unresolved interfaces between hot 
-//  *          diffuse gas and cold dense gas.
-//  *
-//  *   Replace deltaE with minimum of neighboring deltaEs at the interface.
-//  *   Updates dei, which is positive if the gas is cooling.
-//  *
-//  *   \author Julian Pittard (Original version 13.09.11)
-//  *   \version 1.0-stable (Evenstar):
-//  *   \date Last modified: 13.09.11 (JMP)
-//  */
 void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,AthenaArray<Real> &dei,const AthenaArray<Real> &cons){
 
   AthenaArray<Real> pre(ke+1,je+1,ie+1);
@@ -279,13 +211,13 @@ void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,AthenaArray<R
   for (int k = ks; k <= ke; k++){
     for (int j = js; j <= je; j++){
       for (int i = is; i <= ie; i++){
-        Real rho = cons(IDN,k,j,i);
-	Real u1  = cons(IM1,k,j,i)/rho; 
-	Real u2  = cons(IM2,k,j,i)/rho; 
-	Real u3  = cons(IM3,k,j,i)/rho;
-	Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	Real ie = cons(IEN,k,j,i) - ke;
-	pre(k,j,i) = g1*ie;
+        Real rho    = cons(IDN,k,j,i);
+        Real u1     = cons(IM1,k,j,i)/rho;
+        Real u2     = cons(IM2,k,j,i)/rho;
+        Real u3     = cons(IM3,k,j,i)/rho;
+        Real ke     = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
+        Real ie     = cons(IEN,k,j,i) - ke;
+        pre (k,j,i) = g1*ie;
       }
     }
   }
@@ -300,45 +232,48 @@ void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,AthenaArray<R
       int jtp = std::min(j+1,je);
       int jbt = std::max(j-1,js);
       for (int i = is+1; i < ie; i++){
-	scrch(i) = std::min(cons(IDN,k,j,i+1),cons(IDN,k,j,i-1));
-	drhox(i) = cons(IDN,k,j,i+1) - cons(IDN,k,j,i-1);
+        scrch(i) = std::min(cons(IDN,k,j,i+1),cons(IDN,k,j,i-1));
+        drhox(i) = cons(IDN,k,j,i+1) - cons(IDN,k,j,i-1);
         drhox(i) = std::copysign(drhox(i),(pre(k,j,i-1)/cons(IDN,k,j,i-1)
-			     - pre(k,j,i+1)/cons(IDN,k,j,i+1)))/scrch(i) - 2;
-	if (nd > 1){
-  	  scrch(i) = std::min(cons(IDN,k,jtp,i),cons(IDN,k,jbt,i));
-	  drhoy(i) = cons(IDN,k,jtp,i) - cons(IDN,k,jbt,i);
+          - pre(k,j,i+1)/cons(IDN,k,j,i+1)))/scrch(i) - 2;
+        if (nd > 1){
+          scrch(i) = std::min(cons(IDN,k,jtp,i),cons(IDN,k,jbt,i));
+          drhoy(i) = cons(IDN,k,jtp,i) - cons(IDN,k,jbt,i);
           drhoy(i) = std::copysign(drhoy(i),(pre(k,jbt,i)/cons(IDN,k,jbt,i)
-			     - pre(k,jtp,i)/cons(IDN,k,jtp,i)))/scrch(i) - 2;
+            - pre(k,jtp,i)/cons(IDN,k,jtp,i)))/scrch(i) - 2;
         }
-	if (nd == 3){
-  	  scrch(i) = std::min(cons(IDN,ktp,j,i),cons(IDN,kbt,j,i));
-	  drhoz(i) = cons(IDN,ktp,j,i) - cons(IDN,kbt,j,i);
+        if (nd == 3){
+          scrch(i) = std::min(cons(IDN,ktp,j,i),cons(IDN,kbt,j,i));
+          drhoz(i) = cons(IDN,ktp,j,i) - cons(IDN,kbt,j,i);
           drhoz(i) = std::copysign(drhoz(i),(pre(kbt,j,i)/cons(IDN,kbt,j,i)
-			     - pre(ktp,j,i)/cons(IDN,ktp,j,i)))/scrch(i) - 2;
+            - pre(ktp,j,i)/cons(IDN,ktp,j,i)))/scrch(i) - 2;
         }
-	if      (nd == 1) dis(i) = drhox(i);
-	else if (nd == 2) dis(i) = std::max(drhox(i),drhoy(i));
-	else              dis(i) = std::max(drhox(i),std::max(drhoy(i),drhoz(i)));
+        if      (nd == 1) dis(i) = drhox(i);
+        else if (nd == 2) dis(i) = std::max(drhox(i),drhoy(i));
+        else              dis(i) = std::max(drhox(i),std::max(drhoy(i),drhoz(i)));
       }
       dis(is) = -1.0;
       dis(ie) = -1.0;
 
       for (int i = is; i <= ie; i++){
-	int itp = std::min(i+1,ie);
-	int ibt = std::max(i-1,is);
-	if (dis(i) > 0.0){
-  	  if      (nd == 1) scrch(i) = std::min(dei(k,j,ibt),dei(k,j,itp));
-	  else if (nd == 2) scrch(i) = std::min(dei(k,j,ibt),std::min(dei(k,j,itp),
-					  std::min(dei(k,jtp,i),dei(k,jbt,i))));
-          else              scrch(i) = std::min(dei(k,j,ibt),std::min(dei(k,j,itp),
-				     std::min(dei(k,jtp,i),std::min(dei(k,jbt,i),
-				     std::min(dei(ktp,j,i),dei(kbt,j,i))))));
-	  //std::cout << "k = " << k << "; j = " << j << "; i = " << i << "; scrch = " << scrch(i) << "; dei = " << dei(k,j,i) << "\n";
-	  //exit(EXIT_SUCCESS);
-	  dei(k,j,i) = scrch(i);
-	}
+        int itp = std::min(i+1,ie);
+        int ibt = std::max(i-1,is);
+        if (dis(i) > 0.0){
+          if      (nd == 1) scrch(i) = std::min(dei(k,j,ibt),
+                                      dei(k,j,itp));
+          else if (nd == 2) scrch(i) = std::min(dei(k,j,ibt),
+                                      std::min(dei(k,j,itp),
+                                      std::min(dei(k,jtp,i),
+                                      dei(k,jbt,i))));
+          else              scrch(i) = std::min(dei(k,j,ibt),
+                                      std::min(dei(k,j,itp),
+                                      std::min(dei(k,jtp,i),
+                                      std::min(dei(k,jbt,i),
+                                      std::min(dei(ktp,j,i),
+                                      dei(kbt,j,i))))));
+          dei(k,j,i) = scrch(i);
+        }
       }
-
     } // j loop
   } // k loop
   
@@ -386,6 +321,159 @@ void AdjustPressureDueToCooling(int is, int ie,
   return;
 }
 
+//!  \fn CalcHe(Real x_e)
+//  \brief Perform an integration to find h_e, the effective grain heating
+//  efficiency due to electrons.
+//  - Efficiency is dependent on grain charge, but in this instance it
+//    is assumed that all grains are neutral.
+//  Inputs:
+//  - x_e: E*/kBT, where E* is the critical energy required for an
+//    electron to penetrate a dust grain, D&W (1983), eq. A6
+//  Returns:
+//  - He: effective grain heating factor due to electons
+
+Real CalcHe(Real x_e){
+  Real intf,zpxe,phi,Ixstar,hat;
+  Real f1;
+  const Real x_ep1p5 = pow(x_e,1.5);
+  int nzmax = 400;
+  Real logzmin = -2.0;
+  Real logzmax = 2.0;
+  Real dlogz = (logzmax - logzmin)/(Real)(nzmax);
+  Real f[nzmax+1];
+  bool first = true;
+  Real z[nzmax+1];
+  Real expmz[nzmax+1];
+  Real dz[nzmax];
+  // Create z bins
+  if (first){
+    for (int n = 0; n <= nzmax; ++n){
+      z[n] = pow(10,logzmin+(Real)(n)*dlogz);
+      expmz[n] = exp(-z[n]);
+    }
+    for (int n = 0; n < nzmax; ++n){
+      dz[n] = z[n+1] - z[n];
+    }
+    first = false;
+  }
+  // Evaluate the function at each z position, and integrate using the
+  // trapezium rule
+  for (int n = 0; n <= nzmax; ++n){
+    zpxe = z[n] + x_e;
+    f1 = pow(zpxe,1.5) - x_ep1p5;
+    f[n] = zpxe*pow(f1,2.0/3.0)*expmz[n]; //integral in Dwek and Werner Eq A11 (note typo in TT2013)
+  }
+  intf = 0.0;
+  for (int n = 0; n < nzmax; ++n){
+    intf += 0.5*(f[n+1] + f[n])*dz[n];
+  }
+  Ixstar = 0.5*exp(-x_e)*intf;  // Eq A11 in Dwek & Werner
+  return 1.0 - Ixstar;          // Eq A10 in DW81
+  phi = 0.15;
+  hat = exp(-phi)*(1.0 - Ixstar); // Eq A10 in DW1981
+  // CURRENT STATUS - neither of these return the "correct" result - the resulting curve is different to the approximation of Eq A13 in DW1981
+  return 0.0;
+}
+
+//! \fn void CalcDustLambda(rho,T,aCM,z)
+//  \brief Function to calculate the cooling function, Lambda
+//  for dust in a cell, given in the units (erg cm^-3 s^-1)
+//  - Function is normalised using the electron and proton
+//    number densities, is based on proton and electron collisions
+//    with dust grains.
+//  - Collisional energy is then emitted in the form
+//    of black-body emission. This is not caclulated, and is assumed that
+//    the time scale of emission is << timescale of simulation step
+//  - Code is based off of a cooling curve function provided by Julian,
+//    itself based on Dwek & Werner prescription:
+//      Dwek, E., & Werner, M. W. (1981).
+//      The Infrared Emission From Supernova Condensates.
+//      The Astrophysical Journal, 248, 138.
+//      https://doi.org/10.1086/159138
+//  - A cooling curve is not used for calculating dust emission as
+//    dust parameters z and a can very on a per-cell basis, unlike
+//    plasma cooling, where abundances are assumed to be fairly constant
+//  Input parameters:
+//  - rho, density in g cm^-3
+//  - T, temperature in Kelvin
+//  - aCM, mean grain radius in cm, a is reserved for value in microns
+//  - z, dust-to-gas mass ratio in cell, mD/mG
+//  Returns:
+//  - LambdaNorm, Normalised cooling function due to collisional heating
+//    (erg cm^-3 s^-1) 
+
+Real CalcDustLambda(Real rho, Real T, Real aCM, Real z) {
+  // Constants from model
+  const Real grainBulkDensity = bulk_dens;
+  // Fundamental constants
+  const Real electronMass = 9.1093837e-28;
+  const Real hydrogenMass = 1.6735575e-24;  // Hydrogen atom mass (g)
+  // Unit conversions
+  const Real KeVtoErg   = 1.6021766e-09;
+  const Real cmtoMicron = 1e4;
+  // Most calculations done in microns
+  Real a   = aCM * cmtoMicron; // Convert a from cm to microns
+  Real kBT = kboltz * T;       // Shorthand to reduce fp ops
+  // Calculate hydrogen number density
+  Real nH = (10.0 / 14.0) * rho / massh; // Hydrogen number density
+  // Calculate number densities dependent on nH
+  Real nE   = 1.2 * nH;  // Electron number density
+  Real nP   = nE;        // Proton number density
+  // Caclulate density, grain mass and number density of dust
+  Real rhoD = rho * z;  // Dust density (g cm^-3)
+  Real volD = (4.0/3.0) * PI * CUBE(aCM);  // Dust grain volume (cm^3)
+  Real massD = grainBulkDensity * volD;    // Dust grain mass (g)
+  Real nD = rhoD / massD;
+  // Calculate heating rate due to incident protons
+  // First, calculate critical energy for penetration (KeV)
+  Real eH  = 133.0 * a;
+       eH *= KeVtoErg;   // Convert to ergs 
+  Real hN = 1.0 - (1.0 + eH/(2.0 * kBT)) *
+            std::exp(-eH / kBT);
+  Real Hcoll = 1.26e-19 * SQR(a) * pow(T,1.5) * nH * hN;
+  // Calculate heating rate due to incident electrons
+  Real Ee  = 23.0 * pow(a, 2.0/3.0);
+       Ee *= KeVtoErg;   // Calculate threshold energy
+  Real xe = Ee/kBT;
+  Real he = CalcHe(xe);
+  Real Hel = 1.26e-19 * SQR(a) * pow(T,1.5) * nE * he /
+             std::sqrt(electronMass / hydrogenMass);
+  // Caclulate lambda
+  Real lambda = (Hcoll + Hel) / nH;
+  // Wrap up and return!
+  return lambda;
+}
+
+//! \fn CoolingFunction()
+//  \brief A function used to simulate the energy lost to the system through
+//         radiation
+//  - Cooling is simulated by the loss of cell energy by modification of the
+//    cons(IEN) variable
+//  - As cooling timescale may be smaller than the timestep, dt, and modifying
+//    this timestep such it is < tau_cool would result in significantly more
+//    computational load from hydro and other functions in the code, substepping
+//    is used
+//    - Energy loss integration is based on cooling time, which is updated per
+//      substep, until dt has been reached
+//  - Energy loss is then stored in an additional array
+//    - This is done as additional checks are required to restrict cooling along
+//      unresolved interfaces (see function RestrictCool) through interpolation
+//    - Overall more accurate solution and prevents values from going wonky
+//  - Additional checks are made in order to prevent failures in the Riemann
+//    solver, as cooling can render this unstable.
+//    - Main check is for div/0 errors, this seems to be enough in most cases/
+//    - If you are finding the program crashes due to this, decrease the courant
+//      number of your problem
+//
+//  ++ TO-DO ++
+//  - There are a number of optimisations to be made in the dust code
+//    - nE, nP and nD are calculated at every step in loop, calculate
+//      initially and instead forward to function as arguments.
+//  - Function assumes that WR is absolutely dominant, as such properties
+//    such as wind temperature and average mass.
+//    - Using an average based on wind momentum ratio might be an idea,
+//      but overall it's probably not worth pursuing.
+
 void CoolingFunction(MeshBlock *pmb, const Real dt,
                      AthenaArray<Real> &cons)
 {
@@ -396,14 +484,16 @@ void CoolingFunction(MeshBlock *pmb, const Real dt,
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         // Read conserved variables
         Real rho = cons(IDN,k,j,i);        // Denisty (g cm^-3)
+        Real te  = cons(IEN,k,j,i);        // Total energy (ergs)
         Real u1  = cons(IM1,k,j,i) / rho;  // U_1 (cm s^-1)
         Real u2  = cons(IM2,k,j,i) / rho;  // U_2 (cm s^-1)
         Real u3  = cons(IM3,k,j,i) / rho;  // U_2 (cm s^-1)
         // Read scalars
-        Real wm = pmb->pscalars->r(0,k,j,i);  // Wind mass fraction scalar
+        Real a = 0.0;
+        Real z = 0.0;
         if (dust_cool) {
-          Real z = pmb->pscalars->r(ZLOC,k,j,i);  // Dust mass fraction
-          Real a = pmb->pscalars->r(ALOC,k,j,i);  // Dust avg. radius (cm)
+          z = pmb->pscalars->r(ZLOC,k,j,i);  // Dust mass fraction
+          a = pmb->pscalars->r(ALOC,k,j,i);  // Dust avg. radius (cm)
         }
         // Calculate fluid velocity
         Real v2  = SQR(u1) + SQR(u2) + SQR(u3);  // Square of scalar velocity
@@ -411,20 +501,41 @@ void CoolingFunction(MeshBlock *pmb, const Real dt,
         // Calculate average mass of particle in cell
         Real avgmass = WR.avgm;
         // Calculate average unshocked wind temperature (K)
-        Real TWind   = (wm * WR.twnd) + ((wm - 1.0) * OB.twnd); 
+        Real TWind   = WR.twnd; 
         // Calculate internal energy of cell
-        Real ke  = 0.5 * rho * v2;        // Bulk kinetic energy of fluid (erg)
-        Real ie  = cons(IEN,k,j,i) - ke;  // Internal energy of fluid (erg)
-        Real pre = g1 * ie;               // Running pressure (Ba)
-        Real preOld = pre;                // Original pressure (Ba)
+        Real ke     = 0.5 * rho * v2;  // Bulk kinetic energy of fluid (erg)
+        Real ie     = te - ke;         // Internal energy of cell (erg)
+        Real pre    = g1 * ie;         // Running pressure (Ba)
+        Real preOld = pre;             // Original pressure (Ba)
         // Calculate Initial temperature
         Real T = (pre * avgmass) / (rho * kboltz);  // Running temperature (K)
         Real TOld = T;  // Original temperature (K)
-        // Check for most egregious error, if temperature found to be invalid
-        // This prevents the simulation from running on indefinitely
-        // Even after it  has failed
 
-        
+        // Calculate cooling constants for plasma and dust cooling
+        // - These are parts of the equation that are independent of pressure
+        //   and temperature, so can be calculated once and used in the
+        //   cooling loop
+        Real edotConstGas  = SQR(rho)/SQR(massh);
+        Real edotConstDust = 0.0;
+        if (dust_cool && a > 0.0 && z > 0.0) {
+          Real rhoD  = rho * z;
+          Real massD = (4.0/3.0) * PI * CUBE(a);
+          Real nD    = rhoD / massD;
+          edotConstDust = (rho / massh) * nD;
+        }
+
+        // Check for most egregious error, if temperature found to be invalid
+        // - Div/0 and negative pressures result in invalid values that are not
+        //   checked on by Athena++ 
+        // - This prevents the simulation from running on indefinitely
+        //   Even after it has utterly failed
+        // - This may cause the simulation to fail, if that is the case, 
+        //   typically lowering Courant number fixes this!
+        //   - Time step will be too large, resulting in invalid values, which
+        //     then propagate to next step
+        //   - It's also better than coming back to your workstation to find a
+        //     bunch of gibberish, trust me!
+
         if (std::isnan(TOld) || std::isinf(TOld)) {
           printf("CRASH:\n");
           printf("GRID_POS %05d %05d %05d\n",i,j,k);
@@ -448,25 +559,28 @@ void CoolingFunction(MeshBlock *pmb, const Real dt,
         }
         else {
           Real dtInt = 0.0;  // Internal dt, for substepping
-          Real lCool = 0.0;  // Cooling length (cm)
           while (dtInt < dt) {
             Real Eint    = pre/g1;
             Real lambda  = CCurve.FindLambda(T);
-            Real edotGas = (SQR(rho)/SQR(massh)) * lambda;
-            if (dust_cool) {
-              // Do some dust cooling here 
+
+            Real edotGas  = edotConstGas * lambda;
+            Real edotDust = 0.0;
+            if (dust_cool && z > 0.0 && a > 0.0) {
+              // First, calculate the normalised cooling function due to dust
+              Real lambdaDust = CalcDustLambda(rho,T,a,z);
+              // Then calculate the energy lost (erg s^-1)
+              edotDust = edotConstDust * lambdaDust;
             }
-            Real totalCoolRate = edotGas;
+
+            Real totalCoolRate  = 0.0;
+                 totalCoolRate += edotGas;
+                 totalCoolRate += edotDust;
             Real t_cool = Eint / totalCoolRate;
-            // 
-            Real tCool  = Eint / totalCoolRate;
             Real dtCool = 0.1 * std::abs(t_cool);
-            // Rela 
             if ((dtInt + dtCool) > dt) {
               dtCool = dt - dtInt;
             }
             dtInt += dtCool;
-            lCool += v*dtCool;
             // Calculate new temperature, update pressure
             Real dEint = -totalCoolRate * dtCool;
             Real TNew  = T * (Eint + dEint) / Eint;
@@ -484,12 +598,14 @@ void CoolingFunction(MeshBlock *pmb, const Real dt,
     }
   }
 
+  // Restrict cooling along unresolved interfaces
   RestrictCool(pmb->is,pmb->ie,
                pmb->js,pmb->je,
                pmb->ks,pmb->ke,
                pmb->pmy_mesh->ndim,
                dei,cons);
-  // // Adjust pressure due to cooling
+  // Adjust pressure due to cooling
+  // - This is where the dei() array is actually used to change cons(IEN)
   AdjustPressureDueToCooling(pmb->is,pmb->ie,
                              pmb->js,pmb->je,
                              pmb->ks,pmb->ke,
@@ -498,7 +614,24 @@ void CoolingFunction(MeshBlock *pmb, const Real dt,
 }
 
 //! \fn void EvolveDust
-//  \brief Function to evolve dust
+//  \brief Function to evolve dust due to sputtering and grain growth
+//  Grain sputtering using Draine & Salpeter prescription (1979) prescription
+//    Ref: Draine, B. T., & Salpeter, E. E. (1979).
+//         On the physics of dust grains in hot gas.
+//         The Astrophysical Journal, 231, 77–94.
+//         https://doi.org/10.1086/157165
+//  - The dust lifetime is of the order 1e6 * (a / n) years if T > 1e6K
+//    where a is the grain radius in microns, and n is the gas nucleon no.
+//    density (eq. 44, fig 7.)
+//  - Grain growth occurs at T < 1.5e4K, the governing equations can be found
+//    at page 208 of: 
+//    Spitzer Jr., L. (2008).
+//    Physical Processes in the Interstellar Medium.
+//    - Grain growth occurs at a rate:
+//      da/dt = (w_a rho_a xi_a)/(4 rho_s)
+//      Where w_a is the grain RMS velocity, rho_a is the interstellar mass
+//      density of atoms, rho_s is the density of the grains and the xi is
+//      the sticking probability of atoms onto grains
 
 void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
   // Problem dependent dust variables
@@ -517,7 +650,7 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
         Real u1  = cons(IM1,k,j,i);  // Gas velocity x direction (cm s^-1)
         Real u2  = cons(IM2,k,j,i);  // Gas velocity y direction (cm s^-1)
         Real u3  = cons(IM3,k,j,i);  // Gas velocity z direction (cm s^-1)
-        // Import scalars
+        // Import scalars from pscalars
         Real col = pmb->pscalars->s(CLOC,k,j,i) / rho;  // Wind colour
         Real a   = pmb->pscalars->s(ALOC,k,j,i) / rho;  // Grain radius (cm)
         Real z   = pmb->pscalars->s(ZLOC,k,j,i) / rho;  // Dust mass fraction 
@@ -529,11 +662,11 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
         // Replace a with minimum nucleation size and z if needed
         a = std::max(minGrainRadius,a);
         z = std::max(minDustToGasMassRatio,z);
-        // Calculate gas number densities
-        Real nH = rho * (10.0/14.0) / massh;
-        Real nTot = 1.1 * nH;
+        // Estimate gas number density (Hydrogen and ions)
+        Real nH = rho * (10.0/14.0) / massh;  // Hyrogen number density (cm^-1)
+        Real nTot = 1.1 * nH;                 // Total number density (cm^-1)
         // Calculate additional dust properties
-        Real a2    = SQR(a);
+        Real a2    = SQR(a); 
         Real a3    = CUBE(a); 
         Real massD = (4.0 / 3.0) * PI * a3 * grainDensity;
         Real rhoD  = rho * z;  // Dust density (g cm^-3)
@@ -585,8 +718,13 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
 //! \fn void CWBExplicitSourceFunction
 //  \brief Function containing smaller functions to be enrolled into meshblock class
 //  As only one explicit source function can be enrolled into Athena, and
-//  using a single long source function would be clunky, this funciton
-//  is used to 
+//  using a single long source function would be clunky, this function
+//  calls other smaller functions that handle:
+//  - Cooling due to plasma and dust emission
+//  - Dust growth and desctruction
+//  This does mean that these events do not happen simultaneously, but they are
+//  not particularly dependent on one another.
+//  Initially wind remap was performed here, 
 
 void CWBExplicitSourceFunction(MeshBlock *pmb, const Real time, const Real dt,
                                const AthenaArray<Real> &prim,
@@ -723,6 +861,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   orbit = pin->GetBoolean("problem","orbit");
   cool  = pin->GetBoolean("problem","cool");
   dust  = pin->GetBoolean("problem","dust");
+  if (dust) {dust_cool = pin->GetBoolean("problem","dust_cool");}
 
   // Initialise stars
   WR.Init(pin,"wr",1);
