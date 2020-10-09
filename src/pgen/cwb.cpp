@@ -554,8 +554,8 @@ void CoolingFunction(MeshBlock *pmb, const Real dt,
         }
         // This should prevent wasting time in the unshocked gas
         // Forces temp to Twind, Pseudo heating effect
-        if (T < 1.5 * TWind) {
-          T = TWind; 
+        if (T < 1e3) {
+          T = 1e3; 
         }
         else {
           Real dtInt = 0.0;  // Internal dt, for substepping
@@ -628,9 +628,9 @@ void CoolingFunction(MeshBlock *pmb, const Real dt,
 //    Spitzer Jr., L. (2008).
 //    Physical Processes in the Interstellar Medium.
 //    - Grain growth occurs at a rate:
-//      da/dt = (w_a rho_a xi_a)/(4 rho_s)
+//      da/dt = (w_a rho_a eps_a)/(4 rho_s)
 //      Where w_a is the grain RMS velocity, rho_a is the interstellar mass
-//      density of atoms, rho_s is the density of the grains and the xi is
+//      density of atoms, rho_s is the density of the grains and eps is
 //      the sticking probability of atoms onto grains
 
 void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
@@ -647,6 +647,7 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         // Import and calculate gas parameters of cell
         Real rho = cons(IDN,k,j,i);  // Gas density (g cm^-3)
+        Real te  = cons(IEN,k,j,i);  // Gas total energy (ergs)
         Real u1  = cons(IM1,k,j,i);  // Gas velocity x direction (cm s^-1)
         Real u2  = cons(IM2,k,j,i);  // Gas velocity y direction (cm s^-1)
         Real u3  = cons(IM3,k,j,i);  // Gas velocity z direction (cm s^-1)
@@ -657,7 +658,7 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
         // Calculate temperature
         Real v2   = SQR(u1) + SQR(u2) + SQR(u3);
         Real ke   = 0.5 * rho * v2;
-        Real pre  = (cons(IEN,k,j,i) - ke)*g1;
+        Real pre  = (te - ke)*g1;
         Real temp = WR.avgm * pre / (rho * kboltz);
         // Replace a with minimum nucleation size and z if needed
         a = std::max(minGrainRadius,a);
@@ -680,7 +681,7 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
           Real dadt     = -a / tau_D;
           Real rhoD_dot = -1.33e-17 * grainDensity * a2 * nTot * nD;
         }
-        if (temp < 1.4e4) {
+        else if (temp < 1.5e4) {
           // Dust growth occurs
           Real wa   = std::sqrt(3.0*kboltz*temp/(A*massh));
           Real dadt = 0.25 * eps_a * rho * wa / grainDensity;
@@ -688,20 +689,22 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
         }
         if (rhoD_dot != 0.0) {
           Real dRhoD   = rhoD_dot * dt;  // Integrate to find total change
-          Real rhoDNew = rhoD + dRhoD;
-               rhoDNew = std::max(0.0,rhoDNew);
+          // Calculate new dust density
+          Real minRhoD = minDustToGasMassRatio * rho;
+          Real rhoDNew = std::max(minRhoD, rhoD + dRhoD);
+          // Calculate new gas density
           Real rhoNew  = rho + (rhoD - rhoDNew);
-          // Calculate z
+          // Calculate new dust-to-gass mass ratio
           Real zNew = rhoDNew / rhoNew;
-               zNew = std::min(zNew,1.0);
-               zNew = std::max(0.0,zNew);
-
+          // Calculate new grain density
           Real da   = dadt * dt;
-          Real aNew = (a + da) / 1.0e-4;
-
+          Real aNew = (a + da);
           // Rewrite conserved arrays
           cons(IDN,k,j,i) = rhoNew;
           // Rewrite scalars
+          // Update the conserved wind colour, as gas density has changed
+          pmb->pscalars->s(CLOC,k,j,i) = col * rhoNew;
+          // Update dust scalars
           pmb->pscalars->r(ZLOC,k,j,i) = zNew;
           pmb->pscalars->r(ALOC,k,j,i) = aNew;
           pmb->pscalars->s(ZLOC,k,j,i) = zNew * rhoNew;
