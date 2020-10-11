@@ -648,9 +648,10 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
         // Import and calculate gas parameters of cell
         Real rho = cons(IDN,k,j,i);  // Gas density (g cm^-3)
         Real te  = cons(IEN,k,j,i);  // Gas total energy (ergs)
-        Real u1  = cons(IM1,k,j,i);  // Gas velocity x direction (cm s^-1)
-        Real u2  = cons(IM2,k,j,i);  // Gas velocity y direction (cm s^-1)
-        Real u3  = cons(IM3,k,j,i);  // Gas velocity z direction (cm s^-1)
+        // Converved momentum must be converted into velocities
+        Real u1  = cons(IM1,k,j,i) / rho;  // Gas velocity x direction (cm s^-1)
+        Real u2  = cons(IM2,k,j,i) / rho;  // Gas velocity y direction (cm s^-1)
+        Real u3  = cons(IM3,k,j,i) / rho;  // Gas velocity z direction (cm s^-1)
         // Import scalars from pscalars
         Real col = pmb->pscalars->s(CLOC,k,j,i) / rho;  // Wind colour
         Real a   = pmb->pscalars->s(ALOC,k,j,i) / rho;  // Grain radius (cm)
@@ -675,6 +676,7 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
         // Check to see if dust should grow or shrink in cell
         Real rhoD_dot = 0.0;
         Real dadt     = 0.0;
+
         if (temp > 1.0e6 && z > 0.0) {
           // Dust destruction through thermal sputtering occurs
           Real tau_D    = 3.156e17 * a / nTot;
