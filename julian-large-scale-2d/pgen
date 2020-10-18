@@ -1,0 +1,114 @@
+#Cartesian CWB problem
+#Note: To run using MPI, the MeshBlock size must be defined!
+#Note: The user needs to set dfloor, pfloor and sfloor to sensible values.
+#      In particular, dfloor should be set only about 5dex lower than the lowest expected density.
+#      If it is set lower than this the hydro code can produce NaNs in the fluid values.
+#
+# For star2, at a distance of 1e16 cm, rho = 1.3e-23 g/cm^3. Therefore set dfloor=1e-25.
+
+<comment>
+problem   = CWB
+reference = Pittard
+configure = --prob=cwb
+
+<job>
+problem_id = wr98a_dustv3    # problem ID: basename of output filenames
+
+<output1>
+file_type  = hst        # History data dump
+dt         = 5.0e5      # time increment between outputs (s)
+
+<output2>
+file_type  = hdf5       # HDF5 data dump
+variable   = prim       # variables to be output
+id         = prim       # identifier in filename
+dt         = 5.0e6      # time increment between outputs
+
+<output3>
+file_type  = hdf5       # HDF5 data dump
+variable   = prim       # variables to be output
+id         = 2dxy       # identifier in filename
+x3_slice   = 0.0        # 2D slice at z = 0.0 (the orbital plane)
+dt         = 5.0e5      # time increment between outputs
+
+<output4>
+file_type  = rst        # restart file
+dt         = 5.0e6      # time increment between outputs 5e6
+
+<time>
+cfl_number = 0.25       # The Courant, Friedrichs, & Lewy (CFL) Number
+nlim       = -1         # cycle limit
+tlim       = 1.5e8      # time limit
+integrator  = ssprk5_4  # time integration algorithm
+xorder      = 2         # order of spatial reconstruction
+ncycle_out  = 1         # interval for stdout summary info
+
+<mesh>
+nx1        = 320        # Number of zones in X1-direction
+x1min      = -192.0e13    # minimum value of X1
+x1max      = +192.0e13     # maximum value of X1
+ix1_bc     = outflow    # inner-X1 boundary flag
+ox1_bc     = outflow    # outer-X1 boundary flag
+
+nx2        = 320         # Number of zones in X2-direction
+x2min      = -192.0e13    # minimum value of X2
+x2max      = +192.0e13     # maximum value of X2
+ix2_bc     = outflow    # inner-X2 boundary flag
+ox2_bc     = outflow    # outer-X2 boundary flag
+
+nx3        = 40         # Number of zones in X3-direction
+x3min      = -24.0e13    # minimum value of X3
+x3max      = +24.0e13     # maximum value of X3
+ix3_bc     = outflow    # inner-X3 boundary flag 
+ox3_bc     = outflow    # outer-X3 boundary flag
+
+
+refinement = static
+
+<refinement1>
+x1min = -12.0e13
+x1max = +12.0e13
+x2min = -12.013
+x2max = +12.0e13
+x3min = -1.5e13
+x3max = +1.5e13
+level = 4
+
+<meshblock>
+nx1     =    32
+nx2     =    32
+nx3     =    8
+
+<hydro>
+gamma      = 1.66667    # gamma = C_p/C_v
+dfloor     = 1.0e-25    # required otherwise Athena++ uses a default value
+pfloor     = 1.0e-25    # required otherwise Athena++ uses a default value
+sfloor     = 0.0
+
+<problem>
+mdot1      = 5.0e-6     # Mass-loss rate of star 1 (Msol/yr)
+mdot2      = 5.0e-8     # Mass-loss rate of star 2 (Msol/yr)
+vinf1      = 0.9e8      # Terminal wind speed of star 1 (cm/s)
+vinf2      = 2.0e8      # Terminal wind speed of star 2 (cm/s)
+
+remapRadius1 = 6.0e12   # remap radius of star 1 (cm) (dx=7.5e11; set to 8 cells)
+remapRadius2 = 6.0e12   # remap radius of star 2 (cm)
+
+xpos1      = -3.91e13    # Coordinate-1 position of star 1 (cm)
+ypos1      = 0.0        # Coordinate-2 position of star 1 (cm)
+zpos1      = 0.0        # Coordinate-3 position of star 1 (cm)
+xpos2      = 2.17e13     # Coordinate-1 position of star 2 (cm)
+ypos2      = 0.0        # Coordinate-2 position of star 2 (cm)
+zpos2      = 0.0        # Coordinate-3 position of star 2 (cm)
+mass1      = 10.0       # Mass of star 1 (Msol)
+mass2      = 18.0       # Mass of star 2 (Msol)
+
+ecc = 0.0               # orbit eccentricity
+period = 4.88e7        # orbit period (s)
+phaseoff = 0.0          # orbit phase offset (from periastron)
+
+cooling = on            # cooling "on" or "off"
+dust    = on            # dust "on" or "off"
+
+initialDustToGasMassRatio = 1.0e-4 # in initial winds
+initialGrainRadiusMicrons = 0.01 # initial radius of dust grains

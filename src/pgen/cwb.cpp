@@ -173,8 +173,16 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
   // Add a user-defined global output (see https://github.com/PrincetonUniversity/athena-public-version/wiki/Outputs)
   if (dust){
-    AllocateUserHistoryOutput(1);
+    // Because of the way user history outputs work, this function needs
+    // to be run 5 times across entire numerical grid, which isn't
+    // particularly efficient, but still not too bad compared to entire
+    // hydro grid
+    AllocateUserHistoryOutput(5);
     EnrollUserHistoryOutput(0, DustCreationRateInWCR, "dmdustdt_WCR");
+    EnrollUserHistoryOutput(1, DustCreationRateInWCR, "dmdust_WCR_dt_created");
+    EnrollUserHistoryOutput(2, DustCreationRateInWCR, "dmdust_WCR_dt_destroyed");
+    EnrollUserHistoryOutput(3, DustCreationRateInWCR, "dust_WCR");
+    EnrollUserHistoryOutput(4, DustCreationRateInWCR, "dust_TOTAL");
   }
   
   // No mesh blocks exist at this point...
@@ -749,6 +757,9 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
   // Adjust pressure due to cooling
   AdjustPressureDueToCooling(pmb->is,pmb->ie,pmb->js,pmb->je,pmb->ks,pmb->ke,gmma1,dei,cons);
+
+  dei.DeleteAthenaArray();
+  return;
 }
 
 //========================================================================================
@@ -1371,6 +1382,10 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
   AthenaArray<Real>& cons = pmb->phydro->u;
   
   Real dmdustdt_WCR = 0.0;
+  Real dmdust_WCR_dt_created   = 0.0;
+  Real dmdust_WCR_dt_destroyed = 0.0;
+  Real dust_WCR   = 0.0;
+  Real dust_TOTAL = 0.0;
   
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     Real zc = pmb->pcoord->x3v(k) - zpos1;
@@ -1380,55 +1395,62 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
       Real yc2 = yc*yc;
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         Real xc = pmb->pcoord->x1v(i) - xpos1;
-	Real xc2 = xc*xc;
-	Real r2 = xc2 + yc2 + zc2;
-
-	Real rho = cons(IDN,k,j,i);
-	Real nH = rho*(10.0/14.0)/massh;           // solar with 10 H per 1 He, avg nucleon mass mu_nu = 14/11. 
-        Real ntot = 1.1*nH;                        // total nucleon number density
-        Real z = pmb->pscalars->s(1,k,j,i)/rho;    // dust mass fraction
-        Real rhod = rho*z;                         // dust mass density (g/cm^3)
-
-        Real a = (pmb->pscalars->s(2,k,j,i)/rho)*1.0e-4; // grain radius (cm)
-        Real massD = (4.0/3.0)*pi*std::pow(a,3)*dens_g; // grain mass (g)
-
-	Real nD = rhod/massD;                      // grain number density (cm^-3)
-
-	Real u1  = cons(IM1,k,j,i)/rho; 
-	Real u2  = cons(IM2,k,j,i)/rho; 
-	Real u3  = cons(IM3,k,j,i)/rho;
-	Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
-
+        Real xc2 = xc*xc;
+        Real vol = pmb->pcoord->GetCellVolume(k, j, i); // Cell volume (cm)
+        Real r2 = xc2 + yc2 + zc2;
+        Real rho = cons(IDN,k,j,i);
+        Real u1  = cons(IM1,k,j,i)/rho; 
+        Real u2  = cons(IM2,k,j,i)/rho; 
+        Real u3  = cons(IM3,k,j,i)/rho;
+        Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
+        Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
         Real col = pmb->pscalars->s(0,k,j,i)/rho;  // wind colour (1.0 for primary wind, 0.0 for secondary wind)
-	
-	//if (col > 0.5) avgm = stavgm[0][0];
+        //if (col > 0.5) avgm = stavgm[0][0];
         //else           avgm = stavgm[1][0]; 
+        Real z   = pmb->pscalars->s(1,k,j,i)/rho;  // dust mass fraction
+        Real a   = pmb->pscalars->s(2,k,j,i)/rho;  // Grain radius (micron)
+             a  *= 1.0e-4;                         // Convert to cm
+        Real nH = rho*(10.0/14.0)/massh;           // solar with 10 H per 1 He, avg nucleon mass mu_nu = 14/11. 
+        Real ntot = 1.1*nH;                        // total nucleon number density
+        Real rhod = rho*z;                         // dust mass density (g/cm^3)
+        Real massD = (4.0/3.0)*pi*std::pow(a,3)*dens_g; // grain mass (g)
+        Real nD = rhod/massD;                      // grain number density (cm^-3)
         Real avgm = avgmass;     
-	Real temp = avgm * pre / (rho*boltzman);
+        Real temp = avgm * pre / (rho*boltzman);
+        // Determine overdensity from smooth WR wind
+        Real rho_smooth =  mdot1/(4.0*pi*r2*vinf1);
+        Real rhod_dot = 0.0;
 
-	// Determine overdensity from smooth WR wind
-	Real rho_smooth =  mdot1/(4.0*pi*r2*vinf1);
+        Real r = std::sqrt(r2);
+        if (rho > 2.0*rho_smooth && col > 0.5 && r > remapRadius1){
+          if (temp < 1.4e4){
+            // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
+            Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
+            Real dadt = 0.25*eps_a*rho*wa/dens_g;
+            rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+            dmdust_WCR_dt_created += rhod_dot * vol;
+          }
+          if (temp > 1.0e6 && z > 0.0) {
+            Real tauD = 3.156e17 * a / ntot;
+            Real dadt = -a / tauD;
+            rhod_dot  = -1.33e-17 * dens_g * SQR(a) * ntot * nD;
+            dmdust_WCR_dt_destroyed += rhod_dot * vol;
+          }
+          // In cool WCR
+          dust_WCR     += rhod * vol;
+          dmdustdt_WCR += rhod_dot * vol;
+        }
 
-
-	
-	Real rhod_dot = 0.0;
-	
-	
-        if (temp < 1.4e4){
-	  // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
-	  Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
-	  Real dadt = 0.25*eps_a*rho*wa/dens_g;
-	  rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
-	  Real r = std::sqrt(r2);
-	  if (rho > 2.0*rho_smooth && col > 0.5 && r > remapRadius1){
-	    // In cool WCR
-            Real vol = pmb->pcoord->GetCellVolume(k, j, i);
-	    dmdustdt_WCR += rhod_dot*vol;
-	  }
-	}
+        if (r > remapRadius1) {
+          dust_TOTAL += rhod * vol;
+        }
       }
     }
   }
-  return dmdustdt_WCR;
+
+       if (iout == 0) return dmdustdt_WCR;
+  else if (iout == 1) return dmdust_WCR_dt_created;
+  else if (iout == 2) return dmdust_WCR_dt_destroyed;
+  else if (iout == 3) return dust_WCR;
+  else if (iout == 4) return dust_TOTAL;
 }
