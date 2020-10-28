@@ -45,6 +45,7 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
   MeshBlock *pmb = pm->pblock;
   Real real_max = std::numeric_limits<Real>::max();
   Real real_min = std::numeric_limits<Real>::min();
+  Real real_lowest = std::numeric_limits<Real>::lowest();
   AthenaArray<Real> vol(pmb->ncells1);
   const int nhistory_output = NHISTORY_VARS + pm->nuser_history_output_;
   std::unique_ptr<Real[]> hst_data(new Real[nhistory_output]);
@@ -62,15 +63,22 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
       case UserHistoryOperation::min:
         hst_data[NHISTORY_VARS+n] = real_max;
         break;
+      case UserHistoryOperation::maxpm:
+        hst_data[NHISTORY_VARS+n] = real_lowest;
+      case UserHistoryOperation::avg:
+        hst_data[NHISTORY_VARS+n] = 0.0;
     }
   }
 
   // Loop over MeshBlocks
+  int nblocks = 0;
   while (pmb != nullptr) {
     Hydro *phyd = pmb->phydro;
     Field *pfld = pmb->pfield;
     PassiveScalars *psclr = pmb->pscalars;
     Gravity *pgrav = pmb->pgrav;
+    
+    nblocks++;
 
     // Sum history variables over cells.  Note ghost cells are never included in sums
     for (int k=pmb->ks; k<=pmb->ke; ++k) {
@@ -122,6 +130,7 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
         }
       }
     }
+    int hello [pm->nuser_history_output_];
     for (int n=0; n<pm->nuser_history_output_; n++) { // user-defined history outputs
       if (pm->user_history_func_[n] != nullptr) {
         Real usr_val = pm->user_history_func_[n](pmb, n);
@@ -138,11 +147,27 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
           case UserHistoryOperation::min:
             hst_data[NHISTORY_VARS+n] = std::min(usr_val, hst_data[NHISTORY_VARS+n]);
             break;
+          case UserHistoryOperation::maxpm:
+            hst_data[NHISTORY_VARS+n] = std::max(usr_val, hst_data[NHISTORY_VARS+n]);
+            break;
+          case UserHistoryOperation::avg:
+            hst_data[NHISTORY_VARS+n] += usr_val;
+            break;
         }
       }
     }
     pmb = pmb->next;
   }  // end loop over MeshBlocks
+
+  for (int n=0; n<pm->nuser_history_output_; n++) {
+    switch (pm->user_history_ops_[n]) {
+      case UserHistoryOperation::avg:
+        Real hst_sum = hst_data[NHISTORY_VARS+n];
+        Real hst_avg = hst_sum / nblocks;
+        hst_data[NHISTORY_VARS+n] = hst_avg / Globals::nranks;
+    }
+  }
+
 
 #ifdef MPI_PARALLEL
   // sum built-in/predefined hst_data[] over all ranks
@@ -166,6 +191,12 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
         break;
       case UserHistoryOperation::min:
         usr_op = MPI_MIN;
+        break;
+      case UserHistoryOperation::maxpm:
+        usr_op = MPI_MAX;
+        break;
+      case UserHistoryOperation::avg:
+        usr_op = MPI_SUM;
         break;
     }
     if (Globals::my_rank == 0) {
@@ -197,39 +228,51 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
     // If this is the first output, write header
     if (output_params.file_number == 0) {
       // NEW_OUTPUT_TYPES:
-
-      int iout = 1;
       std::fprintf(pfile,"# Athena++ history data\n"); // descriptor is first line
-      std::fprintf(pfile,"# [%d]=time     ", iout++);
-      std::fprintf(pfile,"[%d]=dt       ", iout++);
-      std::fprintf(pfile,"[%d]=mass     ", iout++);
-      std::fprintf(pfile,"[%d]=1-mom    ", iout++);
-      std::fprintf(pfile,"[%d]=2-mom    ", iout++);
-      std::fprintf(pfile,"[%d]=3-mom    ", iout++);
-      std::fprintf(pfile,"[%d]=1-KE     ", iout++);
-      std::fprintf(pfile,"[%d]=2-KE     ", iout++);
-      std::fprintf(pfile,"[%d]=3-KE     ", iout++);
-      if (NON_BAROTROPIC_EOS) std::fprintf(pfile,"[%d]=tot-E   ", iout++);
-      if (SELF_GRAVITY_ENABLED) std::fprintf(pfile,"[%d]=grav-E   ", iout++);
+      std::fprintf(pfile,"# time, ");
+      std::fprintf(pfile,"dt, ");
+      std::fprintf(pfile,"mass, ");
+      std::fprintf(pfile,"1-mom, ");
+      std::fprintf(pfile,"2-mom, ");
+      std::fprintf(pfile,"3-mom, ");
+      std::fprintf(pfile,"1-KE, ");
+      std::fprintf(pfile,"2-KE, ");
+      std::fprintf(pfile,"3-KE, ");
+      if (NON_BAROTROPIC_EOS) std::fprintf(pfile,"tot-E, ");
+      if (SELF_GRAVITY_ENABLED) std::fprintf(pfile,"grav-E, ");
       if (MAGNETIC_FIELDS_ENABLED) {
-        std::fprintf(pfile,"[%d]=1-ME    ", iout++);
-        std::fprintf(pfile,"[%d]=2-ME    ", iout++);
-        std::fprintf(pfile,"[%d]=3-ME    ", iout++);
+        std::fprintf(pfile,"1-ME, ");
+        std::fprintf(pfile,"2-ME, ");
+        std::fprintf(pfile,"3-ME, ");
       }
+
       for (int n=0; n<NSCALARS; n++) {
-        std::fprintf(pfile,"[%d]=%d-scalar    ", iout++, n);
+        std::fprintf(pfile,"scalar%d, ", n);
       }
-      for (int n=0; n<pm->nuser_history_output_; n++)
-        std::fprintf(pfile,"[%d]=%-8s", iout++,
+      for (int n=0; n<pm->nuser_history_output_; n++) {
+        std::fprintf(pfile,"%s",
                      pm->user_history_output_names_[n].c_str());
-      std::fprintf(pfile,"\n");                              // terminate line
+        if (n < pm->nuser_history_output_ - 1)
+          {std::fprintf(pfile,", ");}
+      }
+      std::fprintf(pfile,"\n");                             // terminate line
     }
 
+    
+
     // write history variables
-    std::fprintf(pfile, output_params.data_format.c_str(), pm->time);
-    std::fprintf(pfile, output_params.data_format.c_str(), pm->dt);
-    for (int n=0; n<nhistory_output; ++n)
-      std::fprintf(pfile, output_params.data_format.c_str(), hst_data[n]);
+    std::fprintf(pfile, "%.8E, ", pm->time);
+    std::fprintf(pfile, "%.8E, ", pm->dt);
+    for (int n=0; n<nhistory_output; ++n) {
+      switch (pm->user_history_ops_[n]) {
+        case UserHistoryOperation::avg:
+          #ifdef MPI_PARALLEL
+            hst_data[n] = hst_data[n];
+          #endif
+      }
+      std::fprintf(pfile, "%.8E", hst_data[n]);
+      if (n < nhistory_output - 1) {std::fprintf(pfile,", ");}
+    }
     std::fprintf(pfile,"\n"); // terminate line
     std::fclose(pfile);
   }

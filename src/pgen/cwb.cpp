@@ -48,6 +48,10 @@
 #include "../parameter_input.hpp"
 #include "../scalars/scalars.hpp"   // JMP: needed for scalars
 
+// Cube and power-4 macros, significantly faster than using pow
+#define CUBE(x) ( (x)*(x)*(x) )
+#define POW4(x) ( (x)*(x)*(x)*(x) )
+
 bool cool, dust;
 
 Real initialDustToGasMassRatio;
@@ -58,6 +62,11 @@ Real mdot1, mdot2, vinf1, vinf2;
 Real remapRadius1, remapRadius2;
 Real xpos1, xpos2, ypos1, ypos2, zpos1, zpos2;
 Real xvel1, xvel2, yvel1, yvel2, zvel1, zvel2;
+
+Real orbitPhase;  // Orbital phase (t/P)
+Real dsep;        // Star separation distance (cm)
+Real rWR, rOB;    // Stagnation point distance (cm)
+Real xiWR, xiOB;  // Cooling parameters (dimensionless)
 
 Real period;  // orbit period (s)  
 Real phaseoff;// phase offset of orbit (from periastron) 
@@ -75,8 +84,8 @@ const Real boltzman = 1.380658e-16;
 const Real massh = 1.67e-24;
 
 // User defined constants
-const Real minimumDustToGasMassRatio = 1.0e-6;
-const Real minimumGrainRadiusMicrons = 0.01;
+const Real minimumDustToGasMassRatio = 1.0e-7;
+const Real minimumGrainRadiusMicrons = 0.0001;
 const Real grainBulkDensity = 3.0;                       // (g/cm^3)
 const Real Twind = 1.0e4;                                // K
 const Real avgmass = 1.0e-24;     // g
@@ -92,7 +101,15 @@ struct coolingCurve{
 
 // JMP prototypes
 void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons);
+
+// History user functions
+Real UserHistoryFunction(MeshBlock *pmb, int iout);
 Real DustCreationRateInWCR(MeshBlock *pmb, int iout);
+Real ReturnOrbitalProperties(MeshBlock *pmb, int iout);
+Real ReturnStag(MeshBlock *pmb, int iout);
+Real ReturnXi(MeshBlock *pmb, int iout);
+
+
 void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
 //void FixTemperature(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
 //                  const AthenaArray<Real> &bcc, AthenaArray<Real> &cons);
@@ -177,12 +194,39 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     // to be run 5 times across entire numerical grid, which isn't
     // particularly efficient, but still not too bad compared to entire
     // hydro grid
-    AllocateUserHistoryOutput(5);
-    EnrollUserHistoryOutput(0, DustCreationRateInWCR, "dmdustdt_WCR");
-    EnrollUserHistoryOutput(1, DustCreationRateInWCR, "dmdust_WCR_dt_created");
-    EnrollUserHistoryOutput(2, DustCreationRateInWCR, "dmdust_WCR_dt_destroyed");
-    EnrollUserHistoryOutput(3, DustCreationRateInWCR, "dust_WCR");
-    EnrollUserHistoryOutput(4, DustCreationRateInWCR, "dust_TOTAL");
+    AllocateUserHistoryOutput(17);
+    // Orbital properties
+    EnrollUserHistoryOutput(0, UserHistoryFunction, "phase",
+                            UserHistoryOperation::maxpm);
+    EnrollUserHistoryOutput(1, UserHistoryFunction, "x1",
+                            UserHistoryOperation::maxpm);
+    EnrollUserHistoryOutput(2, UserHistoryFunction, "y1",
+                            UserHistoryOperation::maxpm);
+    EnrollUserHistoryOutput(3, UserHistoryFunction, "x2",
+                            UserHistoryOperation::maxpm);
+    EnrollUserHistoryOutput(4, UserHistoryFunction, "y2",
+                            UserHistoryOperation::maxpm);
+    EnrollUserHistoryOutput(5, UserHistoryFunction, "dsep",
+                            UserHistoryOperation::maxpm);
+    // Stagnation points
+    EnrollUserHistoryOutput(6, UserHistoryFunction, "rWR",
+                            UserHistoryOperation::maxpm);
+    EnrollUserHistoryOutput(7, UserHistoryFunction, "rOB",
+                            UserHistoryOperation::maxpm);
+    // Cooling parameters
+    EnrollUserHistoryOutput(8, UserHistoryFunction, "xiWR",
+                            UserHistoryOperation::maxpm);
+    EnrollUserHistoryOutput(9, ReturnXi, "xiOB",
+                            UserHistoryOperation::maxpm);
+    // Basic dust parameters
+    EnrollUserHistoryOutput(10, UserHistoryFunction, "dmdustdt_WCR");
+    EnrollUserHistoryOutput(11, UserHistoryFunction, "dmdust_WCR_dt_created");
+    EnrollUserHistoryOutput(12, UserHistoryFunction, "dmdust_WCR_dt_lost");
+    EnrollUserHistoryOutput(13, UserHistoryFunction, "dust_WCR");
+    EnrollUserHistoryOutput(14, UserHistoryFunction, "dust_TOTAL");
+    EnrollUserHistoryOutput(15, UserHistoryFunction, "a_avg");
+    EnrollUserHistoryOutput(16, UserHistoryFunction, "z_avg");
+    
   }
   
   // No mesh blocks exist at this point...
@@ -1109,24 +1153,21 @@ void OrbitCalc(Real t){
   xvel1 = -v1*cosang;
   yvel2 = -v2*sinang;
   xvel2 =  v2*cosang;
-  
-  // Update dsep and rob
-  //xdist = xpos1 - xpos2;
-  //ydist = ypos1 - ypos2;
-  //zdist = zpos1 - zpos2;
-  //dsep = std::sqrt(xdist*xdist + ydist*ydist + zdist*zdist);
-  //eta = mdot2*vinf2/(mdot1*vinf1);                   // wind mtm ratio
-  //rob = (1.0 - 1.0/(1.0 + std::sqrt(eta)))*dsep;     //distance of stagnation point from star 1 (distance from star 0 is rwr)
-;
-  
-  //std::cout << "xpos1 = " << xpos1 << "; xpos2 = " << xpos2 << "; ypos1 = " << ypos1 << "; ypos2 = " << ypos2 << "; zpos1 = " << zpos1 << "; zpos2 = " << zpos2 << "\n";
-  //std::cout << "dsep = " << dsep << "\n";
-  //exit(EXIT_SUCCESS);
+
+  Real eta = (mdot2 * vinf2) / (mdot1 * vinf1);
+  Real sqrteta = std::sqrt(eta);
+  // Update global orbit phase, for use in history file
+  orbitPhase = phase;
+  // Update dsep and stagnation positions
+  dsep = std::sqrt(SQR(xpos1 - xpos2) + (SQR(ypos1 - ypos2)));
+  rWR  = (1 / (1 + sqrteta)) * dsep;
+  rOB  = (sqrteta / (1 + sqrteta)) * dsep;
+  // Calculate cooling parameter, xi, for each star
+  xiWR = (POW4(vinf1 / 1e8) * (rWR / 1e12)) / ((mdot1 / (Msol/yr)) / 1e-7);
+  xiOB = (POW4(vinf2 / 1e8) * (rOB / 1e12)) / ((mdot2 / (Msol/yr)) / 1e-7);
   
   return;
 }
-
-
 
 /*!  \brief Restrict the cooling rate at unresolved interfaces between hot 
  *          diffuse gas and cold dense gas.
@@ -1369,6 +1410,37 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
   return;
 }
 
+// \brief This function is used to link all the User History file functions
+// While not particularly efficient, it's still better than nothing!
+
+Real UserHistoryFunction(MeshBlock *pmb, int iout) {
+  // indexes 0 through 7, orbital parameters
+  // These have already been calculated every time calcOrbit() is called
+  // Hence nothing has to be done, so running these first saves time
+  if      (iout == 0)  {return orbitPhase;}
+  else if (iout == 1)  {return xpos1;}
+  else if (iout == 2)  {return ypos1;}
+  else if (iout == 3)  {return xpos2;}
+  else if (iout == 4)  {return ypos2;}
+  else if (iout == 5)  {return dsep;}
+  else if (iout == 6)  {return rWR;}
+  else if (iout == 7)  {return rOB;}
+  else if (iout == 8)  {return xiWR;}
+  else if (iout == 9)  {return xiOB;}
+  // Dust creation rate calculator, 
+  else if (iout == 10) {return DustCreationRateInWCR(pmb,0);}
+  else if (iout == 11) {return DustCreationRateInWCR(pmb,1);}
+  else if (iout == 12) {return DustCreationRateInWCR(pmb,2);}
+  else if (iout == 13) {return DustCreationRateInWCR(pmb,3);}
+  else if (iout == 14) {return DustCreationRateInWCR(pmb,4);}
+  else if (iout == 15) {return DustCreationRateInWCR(pmb,5);}
+  else if (iout == 15) {return DustCreationRateInWCR(pmb,5);}
+  // Somethings up, so return
+  else                 {return 0.0;}
+
+
+}
+
 
 
 Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
@@ -1386,6 +1458,10 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
   Real dmdust_WCR_dt_destroyed = 0.0;
   Real dust_WCR   = 0.0;
   Real dust_TOTAL = 0.0;
+
+  Real a_TOTAL = 0.0;
+  Real z_TOTAL = 0.0;
+  Real vol_TOTAL = 0.0;
   
   for (int k=pmb->ks; k<=pmb->ke; ++k) {
     Real zc = pmb->pcoord->x3v(k) - zpos1;
@@ -1444,13 +1520,44 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
         if (r > remapRadius1) {
           dust_TOTAL += rhod * vol;
         }
+
+        a_TOTAL   += a * vol;
+        z_TOTAL   += z * vol;
+        vol_TOTAL += vol;
+
       }
     }
   }
 
-       if (iout == 0) return dmdustdt_WCR;
-  else if (iout == 1) return dmdust_WCR_dt_created;
-  else if (iout == 2) return dmdust_WCR_dt_destroyed;
-  else if (iout == 3) return dust_WCR;
-  else if (iout == 4) return dust_TOTAL;
+  Real a_avg = a_TOTAL / vol_TOTAL;
+  Real z_avg = z_TOTAL / vol_TOTAL;
+  
+       if (iout == 0) {return dmdustdt_WCR;}
+  else if (iout == 1) {return dmdust_WCR_dt_created;}
+  else if (iout == 2) {return dmdust_WCR_dt_destroyed;}
+  else if (iout == 3) {return dust_WCR;}
+  else if (iout == 4) {return dust_TOTAL;}
+  else if (iout == 5) {return a_avg;}
+  else if (iout == 6) {return z_avg;}
+  else                {return 0;}
+}
+
+Real ReturnOrbitalProperties(MeshBlock *pmb, int iout) {
+       if (iout == 0) {return orbitPhase;}
+  else if (iout == 1) {return xpos1;}
+  else if (iout == 2) {return ypos1;}
+  else if (iout == 3) {return xpos2;}
+  else if (iout == 4) {return ypos2;}
+  else if (iout == 5) {return dsep;}
+  else                {return 0;}
+}
+
+Real ReturnStag(MeshBlock *pmb, int iout) {
+       if (iout == 0) {return rWR;}
+  else if (iout == 1) {return rOB;}
+}
+
+Real ReturnXi(MeshBlock *pmb, int iout) {
+       if (iout == 0) {return xiWR;}
+  else if (iout == 1) {return xiOB;}
 }

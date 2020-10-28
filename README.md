@@ -24,4 +24,9 @@ This version has been added upon to simulate dusty colliding wind binary systems
 
 ## Notes
 
-- There appears to be an issue with OpenMPI, at least for me, OpenMP or the Intel MPI libraries are recommended instead!
+### Minor Changes
+As few changes are made to the underlying code of Athena++ as possible, however, there are a few that have been made
+- .hst history outputs are now in the form of a CSV, this is for ease of data reduction
+- Added more history reductions:
+  - UserHistoryOperation::maxpm: Finds the maximum value, inclusive of negative numbers
+  - UserHIstoryOperation::avg: Finds the average value from average value of meshblocks in rank
