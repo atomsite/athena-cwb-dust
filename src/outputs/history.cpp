@@ -65,8 +65,6 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
         break;
       case UserHistoryOperation::maxpm:
         hst_data[NHISTORY_VARS+n] = real_lowest;
-      case UserHistoryOperation::avg:
-        hst_data[NHISTORY_VARS+n] = 0.0;
     }
   }
 
@@ -150,23 +148,11 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
           case UserHistoryOperation::maxpm:
             hst_data[NHISTORY_VARS+n] = std::max(usr_val, hst_data[NHISTORY_VARS+n]);
             break;
-          case UserHistoryOperation::avg:
-            hst_data[NHISTORY_VARS+n] += usr_val;
-            break;
         }
       }
     }
     pmb = pmb->next;
   }  // end loop over MeshBlocks
-
-  for (int n=0; n<pm->nuser_history_output_; n++) {
-    switch (pm->user_history_ops_[n]) {
-      case UserHistoryOperation::avg:
-        Real hst_sum = hst_data[NHISTORY_VARS+n];
-        Real hst_avg = hst_sum / nblocks;
-        hst_data[NHISTORY_VARS+n] = hst_avg / Globals::nranks;
-    }
-  }
 
 
 #ifdef MPI_PARALLEL
@@ -194,9 +180,6 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
         break;
       case UserHistoryOperation::maxpm:
         usr_op = MPI_MAX;
-        break;
-      case UserHistoryOperation::avg:
-        usr_op = MPI_SUM;
         break;
     }
     if (Globals::my_rank == 0) {
@@ -264,12 +247,6 @@ void HistoryOutput::WriteOutputFile(Mesh *pm, ParameterInput *pin, bool flag) {
     std::fprintf(pfile, "%.8E, ", pm->time);
     std::fprintf(pfile, "%.8E, ", pm->dt);
     for (int n=0; n<nhistory_output; ++n) {
-      switch (pm->user_history_ops_[n]) {
-        case UserHistoryOperation::avg:
-          #ifdef MPI_PARALLEL
-            hst_data[n] = hst_data[n];
-          #endif
-      }
       std::fprintf(pfile, "%.8E", hst_data[n]);
       if (n < nhistory_output - 1) {std::fprintf(pfile,", ");}
     }

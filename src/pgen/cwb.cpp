@@ -194,7 +194,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     // to be run 5 times across entire numerical grid, which isn't
     // particularly efficient, but still not too bad compared to entire
     // hydro grid
-    AllocateUserHistoryOutput(17);
+    AllocateUserHistoryOutput(15);
     // Orbital properties
     EnrollUserHistoryOutput(0, UserHistoryFunction, "phase",
                             UserHistoryOperation::maxpm);
@@ -224,8 +224,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     EnrollUserHistoryOutput(12, UserHistoryFunction, "dmdust_WCR_dt_lost");
     EnrollUserHistoryOutput(13, UserHistoryFunction, "dust_WCR");
     EnrollUserHistoryOutput(14, UserHistoryFunction, "dust_TOTAL");
-    EnrollUserHistoryOutput(15, UserHistoryFunction, "a_avg");
-    EnrollUserHistoryOutput(16, UserHistoryFunction, "z_avg");
     
   }
   
@@ -1433,12 +1431,8 @@ Real UserHistoryFunction(MeshBlock *pmb, int iout) {
   else if (iout == 12) {return DustCreationRateInWCR(pmb,2);}
   else if (iout == 13) {return DustCreationRateInWCR(pmb,3);}
   else if (iout == 14) {return DustCreationRateInWCR(pmb,4);}
-  else if (iout == 15) {return DustCreationRateInWCR(pmb,5);}
-  else if (iout == 15) {return DustCreationRateInWCR(pmb,5);}
   // Somethings up, so return
-  else                 {return 0.0;}
-
-
+  return 0.0;
 }
 
 
@@ -1537,9 +1531,7 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
   else if (iout == 2) {return dmdust_WCR_dt_destroyed;}
   else if (iout == 3) {return dust_WCR;}
   else if (iout == 4) {return dust_TOTAL;}
-  else if (iout == 5) {return a_avg;}
-  else if (iout == 6) {return z_avg;}
-  else                {return 0;}
+  return 0;
 }
 
 Real ReturnOrbitalProperties(MeshBlock *pmb, int iout) {
@@ -1549,15 +1541,17 @@ Real ReturnOrbitalProperties(MeshBlock *pmb, int iout) {
   else if (iout == 3) {return xpos2;}
   else if (iout == 4) {return ypos2;}
   else if (iout == 5) {return dsep;}
-  else                {return 0;}
+  return 0;
 }
 
 Real ReturnStag(MeshBlock *pmb, int iout) {
        if (iout == 0) {return rWR;}
   else if (iout == 1) {return rOB;}
+  return 0;
 }
 
 Real ReturnXi(MeshBlock *pmb, int iout) {
        if (iout == 0) {return xiWR;}
   else if (iout == 1) {return xiOB;}
+  return 0;
 }
