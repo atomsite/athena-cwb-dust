@@ -1469,8 +1469,8 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
         Real vol = pmb->pcoord->GetCellVolume(k, j, i); // Cell volume (cm)
         Real r2 = xc2 + yc2 + zc2;
         Real rho = cons(IDN,k,j,i);
-        Real u1  = cons(IM1,k,j,i)/rho; 
-        Real u2  = cons(IM2,k,j,i)/rho; 
+        Real u1  = cons(IM1,k,j,i)/rho;
+        Real u2  = cons(IM2,k,j,i)/rho;
         Real u3  = cons(IM3,k,j,i)/rho;
         Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
         Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
@@ -1492,33 +1492,35 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
         Real rhod_dot = 0.0;
 
         Real r = std::sqrt(r2);
-        if (rho > 2.0*rho_smooth && col > 0.5 && r > remapRadius1){
+
+        // Dust only reasonably grows 
+        if (r > remapRadius1) {
           if (temp < 1.4e4){
             // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
             Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
             Real dadt = 0.25*eps_a*rho*wa/dens_g;
             rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
-            dmdust_WCR_dt_created += rhod_dot * vol;
           }
           if (temp > 1.0e6 && z > 0.0) {
             Real tauD = 3.156e17 * a / ntot;
             Real dadt = -a / tauD;
             rhod_dot  = -1.33e-17 * dens_g * SQR(a) * ntot * nD;
-            dmdust_WCR_dt_destroyed += rhod_dot * vol;
           }
-          // In cool WCR
-          dust_WCR     += rhod * vol;
-          dmdustdt_WCR += rhod_dot * vol;
+          if (rho > 2.0*rho_smooth && col > 0.5) {
+            if (rhod_dot > 0.0) {
+              dmdust_WCR_dt_created += rhod_dot * vol;
+            }
+            if (rhod_dot < 0.0) {
+              dmdust_WCR_dt_destroyed += rhod_dot * vol;
+            }
+            dust_WCR += rhod*vol;
+            dmdustdt_WCR += rhod_dot * vol;
+          }
+          dust_TOTAL += rhod*vol;
         }
-
-        if (r > remapRadius1) {
-          dust_TOTAL += rhod * vol;
-        }
-
         a_TOTAL   += a * vol;
         z_TOTAL   += z * vol;
         vol_TOTAL += vol;
-
       }
     }
   }
@@ -1526,12 +1528,39 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
   Real a_avg = a_TOTAL / vol_TOTAL;
   Real z_avg = z_TOTAL / vol_TOTAL;
   
-       if (iout == 0) {return dmdustdt_WCR;}
-  else if (iout == 1) {return dmdust_WCR_dt_created;}
-  else if (iout == 2) {return dmdust_WCR_dt_destroyed;}
-  else if (iout == 3) {return dust_WCR;}
-  else if (iout == 4) {return dust_TOTAL;}
+  // Quick check for 
+  if (iout == 0) {
+    if (std::isnan(dmdustdt_WCR) || std::isinf(dmdustdt_WCR)) {
+      return 0;
+    }
+    else return dmdustdt_WCR;
+  }
+  else if (iout == 1) {
+    if (std::isnan(dmdust_WCR_dt_created) || std::isinf(dmdust_WCR_dt_created)) {
+      return 0;
+    }
+    else return dmdust_WCR_dt_created;
+  }
+  else if (iout == 2) {
+    if (std::isnan(dmdust_WCR_dt_destroyed) || std::isinf(dmdust_WCR_dt_destroyed)) {
+      return 0;
+    }
+    else return dmdust_WCR_dt_destroyed;
+  }
+  else if (iout == 3) {
+    if (std::isnan(dust_WCR) || std::isinf(dust_WCR)) {
+      return 0;
+    }
+    else return dust_WCR;
+  }
+  else if (iout == 4) {
+    if (std::isnan(dust_TOTAL) || std::isinf(dust_TOTAL)) {
+      return 0;
+    }
+    else return dust_TOTAL;
+  }
   return 0;
+
 }
 
 Real ReturnOrbitalProperties(MeshBlock *pmb, int iout) {
