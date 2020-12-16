@@ -51,8 +51,12 @@
 // Cube and power-4 macros, significantly faster than using pow
 #define CUBE(x) ( (x)*(x)*(x) )
 #define POW4(x) ( (x)*(x)*(x)*(x) )
+// Scalar memory locations for dust grain parameters
+#define ZLOC 1
+#define ALOC 2
 
 bool cool, dust;
+bool dust_cool;
 
 Real initialDustToGasMassRatio;
 Real initialGrainRadiusMicrons;
@@ -91,13 +95,17 @@ const Real Twind = 1.0e4;                                // K
 const Real avgmass = 1.0e-24;     // g
 
 
-// Structure to store cooling curve data
+// Structure to store gas cooling curve data
 struct coolingCurve{
   int ntmax;
   std::string coolCurveFile;
   std::vector<double> logt,lambdac,te,loglambda;
   double t_min,t_max,logtmin,logtmax,dlogt;
 };
+
+// JWE functions
+Real func_h_e(Real x_e);  // Calculate electron heating efficiency
+Real CalcLambdaDust(Real nH, Real a, Real T);  // Calculate dust cooling parameter
 
 // JMP prototypes
 void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons);
@@ -131,6 +139,7 @@ void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,Real gmma1,At
 void Mesh::InitUserMeshData(ParameterInput *pin) {
   //std::cout << "[Mesh::InitUserMeshData]\n";
   
+
   mdot1 = pin->GetReal("problem","mdot1");
   mdot2 = pin->GetReal("problem","mdot2");
   vinf1 = pin->GetReal("problem","vinf1");
@@ -152,6 +161,14 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   period = pin->GetReal("problem","period");
   phaseoff = pin->GetReal("problem","phaseoff");
 
+  std::string dusty = pin->GetString("problem","dust");
+  if      (dusty == "on")  dust = true;
+  else if (dusty == "off") dust = false;
+  else{
+    std::cout << "dust value not recognized: " << dust << "; Aborting!\n";
+    exit(EXIT_SUCCESS);
+  }
+  
   std::string cooling = pin->GetString("problem","cooling");
   if      (cooling == "on")  cool = true;
   else if (cooling == "off") cool = false;
@@ -160,17 +177,25 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     exit(EXIT_SUCCESS);
   }
 
-  std::string dusty = pin->GetString("problem","dust");
-  if      (dusty == "on")  dust = true;
-  else if (dusty == "off") dust = false;
-  else{
-    std::cout << "dust value not recognized: " << dust << "; Aborting!\n";
-    exit(EXIT_SUCCESS);
+  if (dust == true) {
+    std::string dust_cooling = pin->GetString("problem","dust_cooling");
+    if      (dust_cooling == "on")  dust_cool = true;
+    else if (dust_cooling == "off") dust_cool = false;
+    else{
+      std::cout << "dust_cooling value not recognized: " << dust_cooling << "; Aborting!\n";
+      exit(EXIT_SUCCESS);
+    }
   }
+
+
   if (dust && NSCALARS < 3){
     // Scalars are: 0 = wind colour
     //              1 = dust to gas mass ratio
     //              2 = dust grain radius (microns)
+    // Can also be called with:
+    //           CLOC = Wind colour
+    //           ZLOC = dust to gas mass ratio
+    //           ALOC = dust grain radius (microns)
     std::cout << "Not enough scalars for dust modelling. NSCALARS = " << NSCALARS << ". Aborting!\n";
     exit(EXIT_SUCCESS);
   }
@@ -224,9 +249,8 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     EnrollUserHistoryOutput(12, UserHistoryFunction, "dmdust_WCR_dt_lost");
     EnrollUserHistoryOutput(13, UserHistoryFunction, "dust_WCR");
     EnrollUserHistoryOutput(14, UserHistoryFunction, "dust_TOTAL");
-    
   }
-  
+
   // No mesh blocks exist at this point...
   return;
 }
@@ -239,13 +263,14 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   //std::cout << "[MeshBlock::ProblemGenerator]\n";
-  
+
   Real gmma  = peos->GetGamma();
   Real gmma1 = gmma - 1.0;
   
   Real dsep = std::sqrt(std::pow(xpos1 - xpos2,2) + std::pow(ypos1 - ypos2,2) + std::pow(zpos1 - zpos2,2));
   Real eta = mdot2*vinf2/(mdot1*vinf1);                   // wind mtm ratio
   Real rob = (std::sqrt(eta)/(1.0 + std::sqrt(eta)))*dsep;//distance of stagnation point from star 1 (distance from star 0 is rwr)
+
   OrbitCalc(pmy_mesh->time);
   
   // Map on wind 1
@@ -375,6 +400,7 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
     }
   }
   
+
   return;
 }
 
@@ -403,7 +429,8 @@ void MeshBlock::UserWorkInLoop() {
   Real gmma1 = gmma - 1.0;
 
   // Calculate the stellar positions
-  OrbitCalc(pmy_mesh->time);  
+  OrbitCalc(pmy_mesh->time); 
+
   Real xpos[2]={xpos1,xpos2};
   Real ypos[2]={ypos1,ypos2};
   Real zpos[2]={zpos1,zpos2};
@@ -502,6 +529,7 @@ void MeshBlock::UserWorkInLoop() {
 }
 
 
+
 //========================================================================================
 //! \fn void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
 //		const AthenaArray<Real> &bcc, AthenaArray<Real> &cons)
@@ -513,6 +541,93 @@ void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const Athen
   if (cool) RadiateHeatCool(pmb,dt,cons);
   if (dust) EvolveDust(pmb,dt,cons);
   return;
+}
+
+//! \fn Real func_h_e(Real x_e)
+//  \brief Approximation of electron heating efficiency
+//         - Electron heating is based on on temperature and grain radius
+//         - This function uses a power law series to simplify a complex 
+//           integral in order to calculate lambda due to dust on a
+//           cell-by-cell basis
+//         - Previously the integral form was used, but this massively reduced
+//           performance, even with a simple trapezoidal rule integration
+//         Derived from:
+//         Dwek, E., & Werner, M. W. (1981).
+//         The Infrared Emission From Supernova Condensates.
+//         The Astrophysical Journal, 248, 138.
+//         https://doi.org/10.1086/159138
+
+Real func_h_e(Real x_e) {
+  Real h_e;
+       if (x_e > 4.5) h_e = 1;
+  else if (x_e > 1.5) h_e = 0.37 * pow(x_e,0.62);
+  else                h_e = 0.27 * pow(x_e,1.50);
+  return h_e;
+}
+
+//! \fn Real CalcLambdaDust(Real nH, Real a, Real T)
+//  \brief Calculate lambda, the normalised energy loss rate due to dust
+//         - Energy lost from the gas flow due to dust is mainly due to
+//           collisional heating of the dust particles from atoms and
+//           electrons
+//         - Efficiency losses can occur at high temperatures as particles
+//           are so energetic they pass through one another
+//         - This function approximates this effect
+//         - Resultant value normalised, to find energy loss in erg/s/cm^3
+//           value must be multiplied by nP*nD
+//         Derived from:
+//         Dwek, E., & Werner, M. W. (1981).
+//         The Infrared Emission From Supernova Condensates.
+//         The Astrophysical Journal, 248, 138.
+//         https://doi.org/10.1086/159138
+
+Real CalcLambdaDust(Real nH, Real a, Real T) {
+  // === Setup ===
+  // Units
+  const Real masse      = 9.1093837e-28;
+  const Real keV_to_erg = 1.6021766e-09;
+  // Caclulate electron number density
+  Real ne = 1.2 * nH;  // electron number density
+  // Shorten temp * boltzmann constant to kBT, as this is used a lot  
+  Real kBT = boltzman * T; 
+
+  // === Processing ===
+  // Determine heating rate due to incident atoms
+  // Currently only Hydrogen is considered, but it would be
+  // Trivial to adapt this to work for Helium and CNO, looping
+  // would allow for vectorisation, which could be very fast
+
+  // Determine h_n (Grain heating efficiency due to atoms)
+  // Calculate the critical energy of incident hydrogen atoms
+  Real EH   = 133.0 * a;   // keV
+       EH  *= keV_to_erg;  // ergs
+  // Calculate integral h(a,T), DW81 Eq A9
+  Real h_n  = 1.0 - (1.0 + EH / (2.0*kBT));
+       h_n *= exp(-EH/kBT);
+  // Determine heating rate for H atoms colliding with grains
+  // This is derived from Eq 2 of DW81
+  Real H_coll = 1.26e-19 * SQR(a) * pow(T,1.5) * nH * h_n;
+
+  // Determine heating rate due to incident electrons
+  // Approximation in EQ A13 of DW81 used, this can be off
+  // by around 10%, but is nearly 2,000x faster than a
+  // simple trap rule integration with 400 components and
+  // uses almost no memory.
+
+  // Calculate the critical energy for electron to penetrate grain
+  // This makes the assumption of an uncharged dust grain, Ee = Ec
+  Real Ee  = 23.0 * pow(a,2.0/3.0); // DW81 Eq A6
+       Ee *= keV_to_erg;
+  Real x_e = Ee/kBT;
+  // Calculate efficiency due to grain transparency of electron collisions
+  // This calculation is more involved for electrons, so approximation is used
+  Real h_e = func_h_e(x_e);
+  // Calculate heating rate of electrons, using DW81 Eq 2
+  Real H_el = 1.26e-19 * SQR(a) * pow(T,1.5) * ne * h_e / sqrt(masse/massh);
+  // Calculate normalised cooling function
+  Real lambda = (H_coll + H_el) / nH;
+  // Finish up and return!
+  return lambda;
 }
 
 //========================================================================================
@@ -596,6 +711,7 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
     }
   }
 
+
   AthenaArray<Real> dei(pmb->ke+1,pmb->je+1,pmb->ie+1);
   
   // Now loop over cells, calculating the heating/cooling rate
@@ -617,16 +733,13 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
         Real logtemp = std::log10(temp);
         Real rhomh = rho / massh;
 
-#ifdef DUST
-        // In this simplest implementation the dust moves with the gas and its
-        // mass fraction is given by an advected scalar
-        //	z = lg.P0[iqal0][k][j][i];            // dust mass fraction
-        //rhod = rho*z;                        // dust mass density (g/cm^3)
-        //nD = rhod/massD;                      // grain number density (cm^-3)
-        //nH = rho*(10.0/14.0)/massh;          // solar with 10 H per 1 He, avg nucleon mass mu_nu = 14/11.
-        ////ntot = 1.1*nH;                        // total nucleon number density
-        ////ne = 1.2*nH;                          // electron number density
-#endif
+        Real a;
+        Real z;
+        Real nH,ne,ntot,nD;
+        if (dust_cool) {
+          z = pmb->pscalars->s(ZLOC,k,j,i)/rho;
+          a = pmb->pscalars->s(ALOC,k,j,i)/rho;
+        }
 
         if (std::isnan(tempold) || std::isinf(tempold)){
           std::cout << "tempold is a NaN or an Inf. Aborting!\n";
@@ -689,15 +802,14 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
             //  std::cout << "edotGas = " << edotGas << "; lambda_cool_nc[0] = " << lambda_cool_nc[0] << "\n";
             //}
 
-#ifdef DUST
             // Calculate cooling rate due to dust
-            double edotDust = nH * nD * lambda_cool_nc[1]; // due to dust
-            //if (temp > 1.0e5){
-            //   cout << "nH = " << nH << "; nD = " << nD << "; lambda_D = " << lambda_cool_nc[1] << "\n";
-            //   quit();
-            //}
-            total_cool += edotDust;
-#endif
+            // Uses a separate function as it is quite involved
+            if (dust_cool) {
+              Real lambdaDust = CalcLambdaDust(nH,a,temp);
+              Real edotDust   = nD * nH * lambdaDust;
+              // Add result to cooling total
+              total_cool += edotDust;
+            }
 
             double Eint = pre / gmma1;
             double t_cool = Eint / total_cool;
@@ -1066,7 +1178,6 @@ int RefinementCondition(MeshBlock *pmb)
 
 // Calculate the position and velocities of the stars based on the model time.
 void OrbitCalc(Real t){
-
   float xdist,ydist,zdist;
   double time_offset,torbit,phase,phi,E,dE,cosE,sinE;
   double sii,coi,theta,ang;
@@ -1077,7 +1188,8 @@ void OrbitCalc(Real t){
   double m1,m2,v1,v2;
 
   //std::cout << "dsep = " << dsep << "; t = " << t << "; phaseoff = " << phaseoff << "\n";
-  
+
+ 
   time_offset = phaseoff*period;
   torbit = t + time_offset;  // time in seconds
   phase = torbit/period;
