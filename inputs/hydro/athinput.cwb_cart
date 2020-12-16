@@ -11,7 +11,13 @@ file_type  = hdf5       # Binary data dump
 variable   = cons       # variables to be output
 x3_slice   = 0.0        # 2D slice at z = 0.0 (the orbital plane)
 id         = 2dslice    # Identifier
-dt         = 5e4        # time increment between outputs
+dt         = 1e4        # time increment between outputs
+
+<output2>
+file_type  = hdf5
+variable   = cons
+id         = 3d
+dt         = 1e6
 
 <time>
 cfl_number  = 0.30      # The Courant, Friedrichs, & Lewy (CFL) Number
@@ -22,27 +28,27 @@ xorder      = 2         # order of spatial reconstruction
 ncycle_out  = 1         # interval for stdout summary info
 
 <mesh>
-nx1        = 100        # Number of zones in X1-direction
-x1min      = -1.5e15   # minimum value of X1
-x1max      = +1.5e15    # maximum value of X1
+nx1        = 120        # Number of zones in X1-direction
+x1min      = -1.2e15   # minimum value of X1
+x1max      = +1.2e15    # maximum value of X1
 ix1_bc     = outflow    # inner-X1 boundary flag
 ox1_bc     = outflow    # outer-X1 boundary flag
 
-nx2        = 100        # Number of zones in X2-direction
-x2min      = -1.5e15   # minimum value of X2
-x2max      = +1.5e15    # maximum value of X2
+nx2        = 120        # Number of zones in X2-direction
+x2min      = -1.2e15   # minimum value of X2
+x2max      = +1.2e15    # maximum value of X2
 ix2_bc     = outflow    # inner-X2 boundary flag
 ox2_bc     = outflow    # outer-X2 boundary flag
 
-nx3        = 10         # Number of zones in X3-direction
-x3min      = -1.5e14    # minimum value of X3
-x3max      = 1.5e14     # maximum value of X3
+nx3        = 12        # Number of zones in X3-direction
+x3min      = -1.2e14    # minimum value of X3
+x3max      = +1.2e14     # maximum value of X3
 ix3_bc     = outflow    # inner-X3 boundary flag 
 ox3_bc     = outflow    # outer-X3 boundary flag
 
-refinement = static
+num_threads = 36
 numlevel = 1
-
+refinement = static
 
 <refinement1>
 x1min = -5e13
@@ -54,9 +60,14 @@ x3max = 1e13
 level = 5
 
 <meshblock>
-nx1     =    10
-nx2     =    10
-nx3     =    10
+nx1     =    12
+nx2     =    12
+nx3     =    12
+
+<loadbalancing>
+balancer   = automatic # load balancing method (default = "default")
+interval   = 10        # interval between load balancing (default = 10)
+tolerance  = 0.5       # acceptable load imbalance (default = 0.5 = 50%)
 
 <hydro>
 gamma      = 1.666666666667 # gamma = C_p/C_v
@@ -111,12 +122,12 @@ Y_ob    = 0.275   # Helium mass fraction
 Z_ob    = 0.020   # Mass fraction of remaining elements
 
 # Dust properties
-a_min     = 10e-8
-z_min     = 1e-8
+a_min     = 0.01
+z_min     = 1e-4
 bulk_dens = 3.0
-stick_eff = 0.01
+stick_eff = 0.1
 nuc_temp  = 1e4
 
 # Medium properties
-d_amb     = 1e-22
+d_amb     = 1e-23
 p_amb     = 1e-8
