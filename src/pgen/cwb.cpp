@@ -733,12 +733,21 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
         Real logtemp = std::log10(temp);
         Real rhomh = rho / massh;
 
-        Real a;
-        Real z;
-        Real nH,ne,ntot,nD;
+        // Dust parameters, left empty unless dust cooling enabled
+        Real a;      // Grain radius (micron) 
+        Real z;      // Dust to gas mass ratio
+        Real nH,nD;  // Hydrogen and dust number densities (cm^-3)
         if (dust_cool) {
           z = pmb->pscalars->s(ZLOC,k,j,i)/rho;
           a = pmb->pscalars->s(ALOC,k,j,i)/rho;
+          // Calculate number density of gas
+          nH = rho * (10.0/14.0)/massh;
+          // Calculate dust grain number density
+          Real rhoD  = rho * z;
+          Real volD  = 4.0*PI*CUBE(a*1.0e-4);
+          Real massD = grainBulkDensity * volD;
+          // Finish nD calculation
+          nD = rhoD / massD;
         }
 
         if (std::isnan(tempold) || std::isinf(tempold)){
