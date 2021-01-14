@@ -52,72 +52,67 @@
 #define CUBE(x) ( (x)*(x)*(x) )
 #define POW4(x) ( (x)*(x)*(x)*(x) )
 // Scalar memory locations for dust grain parameters
-#define ZLOC 1
-#define ALOC 2
-
+#define CLOC 0  // Wind "colour"
+#define ZLOC 1  // Dust-to-gas mass ratio
+#define ALOC 2  // Grain radius
+// Logical operators, enabled with pgen file
 bool cool, dust;
 bool dust_cool;
-
+// Dust properties
 Real initialDustToGasMassRatio;
 Real initialGrainRadiusMicrons;
-
-Real mass1, mass2;
-Real mdot1, mdot2, vinf1, vinf2;
-Real remapRadius1, remapRadius2;
-Real xpos1, xpos2, ypos1, ypos2, zpos1, zpos2;
-Real xvel1, xvel2, yvel1, yvel2, zvel1, zvel2;
-
+// Stellar properties
+Real mass1, mass2;                // Mass, msol
+Real mdot1, mdot2;                // Mass loss rates, msol yr^-1
+Real vinf1, vinf2;                // Terminal veloicites, cm s^-1
+Real wrxyz[3], obxyz[3];          // Metallicites, in the form x,y,z
+Real remapRadius1, remapRadius2;  // Remap radii (cm)
+// Orbital positions
+Real xpos1, xpos2, ypos1, ypos2, zpos1, zpos2;  // Star positions from barycenter
+Real xvel1, xvel2, yvel1, yvel2, zvel1, zvel2;  // Star velocities, cm s^-1
+// Other orbital properties
 Real orbitPhase;  // Orbital phase (t/P)
 Real dsep;        // Star separation distance (cm)
 Real rWR, rOB;    // Stagnation point distance (cm)
 Real xiWR, xiOB;  // Cooling parameters (dimensionless)
-
-Real period;  // orbit period (s)  
-Real phaseoff;// phase offset of orbit (from periastron) 
-Real ecc;     // orbit eccentricity
-
-Real tmin,tmax; // min/max temperature allowed on grid
-
+Real period;      // orbit period (s)  
+Real phaseoff;    // phase offset of orbit (from periastron) 
+Real ecc;         // orbit eccentricity
+// Thermodynamic properties
+Real tmin,tmax;   // min/max temperature allowed on grid
+// Refinement properties
 int G0_level = 0;
-
 // Physical and mathematical constants
-const Real pi = 2.0*asin(1.0);
-const Real Msol = 1.9891e33;
-const Real yr = 3.15569e7;
-const Real boltzman = 1.380658e-16;
-const Real massh = 1.67e-24;
-
+const Real pi       = 2.0*asin(1.0);  // Take a wild guess
+const Real Msol     = 1.9891e33;      // Solar mass to grams conversion
+const Real yr       = 3.15569e7;      // Seconds to year converson
+const Real boltzman = 1.380658e-16;   // Boltzman constant (CGS)
+const Real massh    = 1.6726219e-24;  // Proton/hydrogen mass, g
+const Real masse    = 9.1093837e-28;  // Electron mass, g
 // User defined constants
 const Real minimumDustToGasMassRatio = 1.0e-7;
 const Real minimumGrainRadiusMicrons = 0.0001;
 const Real grainBulkDensity = 3.0;                       // (g/cm^3)
 const Real Twind = 1.0e4;                                // K
 const Real avgmass = 1.0e-24;     // g
-
-
 // Structure to store gas cooling curve data
 struct coolingCurve{
-  int ntmax;
-  std::string coolCurveFile;
+  int ntmax;  // Number of bins in cooling curve 
+  std::string coolCurveFile;  // Filename
   std::vector<double> logt,lambdac,te,loglambda;
   double t_min,t_max,logtmin,logtmax,dlogt;
 };
-
-// JWE functions
-Real func_h_e(Real x_e);  // Calculate electron heating efficiency
-Real CalcLambdaDust(Real nH, Real a, Real T);  // Calculate dust cooling parameter
-
+// JWE prototypes
+Real Calc_h_e(Real x_e);  // Calculate electron heating efficiency
+Real CalcLambdaDust(Real nH, Real a, Real T, Real xyz[]);  // Calculate dust cooling parameter
 // JMP prototypes
 void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons);
-
 // History user functions
 Real UserHistoryFunction(MeshBlock *pmb, int iout);
 Real DustCreationRateInWCR(MeshBlock *pmb, int iout);
 Real ReturnOrbitalProperties(MeshBlock *pmb, int iout);
 Real ReturnStag(MeshBlock *pmb, int iout);
 Real ReturnXi(MeshBlock *pmb, int iout);
-
-
 void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
 //void FixTemperature(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
 //                  const AthenaArray<Real> &bcc, AthenaArray<Real> &cons);
@@ -128,7 +123,6 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
 int RefinementCondition(MeshBlock *pmb);
 void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,Real gmma1,AthenaArray<Real> &dei,const AthenaArray<Real> &cons);
 
-
 //========================================================================================
 //! \fn void Mesh::InitUserMeshData(ParameterInput *pin)
 //  \brief Function to initialize problem-specific data in mesh class.  Can also be used
@@ -137,30 +131,38 @@ void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,Real gmma1,At
 //========================================================================================
 
 void Mesh::InitUserMeshData(ParameterInput *pin) {
-  //std::cout << "[Mesh::InitUserMeshData]\n";
-  
-
+  // First, read in star properties
+  // Read in mass loss rates and terminal velocities
   mdot1 = pin->GetReal("problem","mdot1");
   mdot2 = pin->GetReal("problem","mdot2");
   vinf1 = pin->GetReal("problem","vinf1");
   vinf2 = pin->GetReal("problem","vinf2");
-
+  // Read in WR wind mass fractions
+  wrxyz[0] = pin->GetReal("problem","x1");
+  wrxyz[1] = pin->GetReal("problem","y1");
+  wrxyz[2] = pin->GetReal("problem","z1");
+  // Read in OB wind mass fractions
+  obxyz[0] = pin->GetReal("problem","x2");
+  obxyz[1] = pin->GetReal("problem","y2");
+  obxyz[2] = pin->GetReal("problem","z2");
+  // Remap radius, typically set to 5-10x finest cell radius
   remapRadius1 = pin->GetReal("problem","remapRadius1");
   remapRadius2 = pin->GetReal("problem","remapRadius2");
-  
+  // Read in star positions
+  // TODO: Get rid of these, as they aren't really needed!
   xpos1 = pin->GetReal("problem","xpos1");
   ypos1 = pin->GetReal("problem","ypos1");
   zpos1 = pin->GetReal("problem","zpos1");
   xpos2 = pin->GetReal("problem","xpos2");
   ypos2 = pin->GetReal("problem","ypos2");
   zpos2 = pin->GetReal("problem","zpos2");
-
+  // Read in other orbital deteails
   mass1 = pin->GetReal("problem","mass1");
   mass2 = pin->GetReal("problem","mass2");
   ecc   = pin->GetReal("problem","ecc");
   period = pin->GetReal("problem","period");
   phaseoff = pin->GetReal("problem","phaseoff");
-
+  // Determine if dust is being modelled
   std::string dusty = pin->GetString("problem","dust");
   if      (dusty == "on")  dust = true;
   else if (dusty == "off") dust = false;
@@ -168,7 +170,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     std::cout << "dust value not recognized: " << dust << "; Aborting!\n";
     exit(EXIT_SUCCESS);
   }
-  
+  // Determine if cooling is present
   std::string cooling = pin->GetString("problem","cooling");
   if      (cooling == "on")  cool = true;
   else if (cooling == "off") cool = false;
@@ -176,7 +178,7 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     std::cout << "cooling value not recognized: " << cooling << "; Aborting!\n";
     exit(EXIT_SUCCESS);
   }
-
+  // Determine if dust cooling is present
   if (dust == true) {
     std::string dust_cooling = pin->GetString("problem","dust_cooling");
     if      (dust_cooling == "on")  dust_cool = true;
@@ -186,7 +188,6 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
       exit(EXIT_SUCCESS);
     }
   }
-
 
   if (dust && NSCALARS < 3){
     // Scalars are: 0 = wind colour
@@ -466,46 +467,45 @@ void MeshBlock::UserWorkInLoop() {
         Real yc2 = yc*yc;
         for (int i=istl; i<=istu; i++) {
           Real xc = pcoord->x1v(i) - xpos[nw];
-	  Real xc2 = xc*xc;
-  	  Real r2 = xc2 + yc2 + zc2;
-	  Real r = std::sqrt(r2);
+          Real xc2 = xc*xc;
+          Real r2 = xc2 + yc2 + zc2;
+          Real r = std::sqrt(r2);
           if (r < remapRadius[nw]) {
-	    Real xy = xy = std::sqrt(xc2 + yc2);
-	    Real sinphi = xy/r;
-	    Real cosphi = zc/r;
+            Real xy = xy = std::sqrt(xc2 + yc2);
+            Real sinphi = xy/r;
+            Real cosphi = zc/r;
             Real costhta = xc/xy;
-	    Real sinthta = yc/xy;
-	    Real rho = mdot[nw]/(4.0*pi*r2*vinf[nw]);
-	    Real u1, u2, u3;
-	    Real pre = (rho/avgmass)*boltzman*Twind;
+            Real sinthta = yc/xy;
+            Real rho = mdot[nw]/(4.0*pi*r2*vinf[nw]);
+            Real u1, u2, u3;
+            Real pre = (rho/avgmass)*boltzman*Twind;
             if (std::strcmp(COORDINATE_SYSTEM, "cartesian") == 0) {
-	      u1 = vinf[nw]*sinphi*costhta + xvel[nw];
-	      u2 = vinf[nw]*sinphi*sinthta + yvel[nw];
-	      u3 = vinf[nw]*cosphi;
-            } else if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) { // RPZ
-	      u1 = vinf1*sinphi;
-	      u2 = 0.0;
-	      u3 = vinf1*cosphi;
-	    }
-	    //std::cout << "nw = " << nw << "; r = " << r << "; rho = " << rho << "\n";
-	    phydro->u(IDN,k,j,i) = rho;
+              u1 = vinf[nw]*sinphi*costhta + xvel[nw];
+              u2 = vinf[nw]*sinphi*sinthta + yvel[nw];
+              u3 = vinf[nw]*cosphi;
+            }
+            else if (std::strcmp(COORDINATE_SYSTEM, "cylindrical") == 0) { // RPZ
+              u1 = vinf1*sinphi;
+              u2 = 0.0;
+              u3 = vinf1*cosphi;
+            }
+            Real v2 = SQR(u1) + SQR(u2) + SQR(u3);
+            phydro->u(IDN,k,j,i) = rho;
             phydro->u(IM1,k,j,i) = rho*u1;
             phydro->u(IM2,k,j,i) = rho*u2;
             phydro->u(IM3,k,j,i) = rho*u3;
-            phydro->u(IEN,k,j,i) = pre/gmma1 + 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	    
-	    // Set passive scalars
-	    if (NSCALARS > 0) {
-	      // wind "colour"
+            phydro->u(IEN,k,j,i) = pre/gmma1 + 0.5*rho*v2;
+            // Set passive scalars
+            if (NSCALARS > 0) {
+              // wind "colour"
               pscalars->s(0,k,j,i) = scalar[nw]*rho;
+              if (dust){
+                pscalars->s(1,k,j,i) = initialDustToGasMassRatio*rho;
+                pscalars->s(2,k,j,i) = initialGrainRadiusMicrons*rho;
+              }
             }
-	    if (dust){
-              pscalars->s(1,k,j,i) = initialDustToGasMassRatio*rho;
-              pscalars->s(2,k,j,i) = initialGrainRadiusMicrons*rho;
-	    }
-	    	    
-	  }
-	}
+          }
+	      }
       }
     }
   }
@@ -543,7 +543,7 @@ void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const Athen
   return;
 }
 
-//! \fn Real func_h_e(Real x_e)
+//! \fn Real Calc_h_e(Real x_e)
 //  \brief Approximation of electron heating efficiency
 //         - Electron heating is based on on temperature and grain radius
 //         - This function uses a power law series to simplify a complex 
@@ -557,7 +557,7 @@ void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const Athen
 //         The Astrophysical Journal, 248, 138.
 //         https://doi.org/10.1086/159138
 
-Real func_h_e(Real x_e) {
+Real Calc_h_e(Real x_e) {
   Real h_e;
        if (x_e > 4.5) h_e = 1;
   else if (x_e > 1.5) h_e = 0.37 * pow(x_e,0.62);
@@ -581,51 +581,58 @@ Real func_h_e(Real x_e) {
 //         The Astrophysical Journal, 248, 138.
 //         https://doi.org/10.1086/159138
 
-Real CalcLambdaDust(Real nH, Real a, Real T) {
+Real CalcLambdaDust(Real rhoG, Real a, Real T, Real xyz[]) {
   // === Setup ===
-  // Units
-  const Real masse      = 9.1093837e-28;
-  const Real keV_to_erg = 1.6021766e-09;
-  // Caclulate electron number density
-  Real ne = 1.2 * nH;  // electron number density
   // Shorten temp * boltzmann constant to kBT, as this is used a lot  
-  Real kBT = boltzman * T; 
-
+  Real kBT = boltzman * T;
+  // - Allocate a counter for the total amount of energy from each
+  //   element collision
+  // - Precalculated arrays for critical energy constant and atomic mass
+  //   in CGS units for each type of element are declared:
+  //   - For H atoms Ec   = 133keV, m = 1.00797 AMU
+  //   - For He atoms Ec  = 222keV, m = 4.00260 AMU
+  //   - For CNO atoms Ec = 665keV, m = 12.0110 AMU
+  // - This assumes that carbon is dominant in CNO bin
+  Real E_E[3] = {2.1308949e-07,3.5568321e-07,1.0654475e-06};
+  Real m_E[3] = {1.6737736e-24,6.6464737e-24,1.9944735e-23};
+  Real n_E[3];  // Elemental number density, cm^-3
+  Real H_E[3];  // Heating for each element, erg s^-1
   // === Processing ===
-  // Determine heating rate due to incident atoms
-  // Currently only Hydrogen is considered, but it would be
-  // Trivial to adapt this to work for Helium and CNO, looping
-  // would allow for vectorisation, which could be very fast
-
-  // Determine h_n (Grain heating efficiency due to atoms)
-  // Calculate the critical energy of incident hydrogen atoms
-  Real EH   = 133.0 * a;   // keV
-       EH  *= keV_to_erg;  // ergs
-  // Calculate integral h(a,T), DW81 Eq A9
-  Real h_n  = 1.0 - (1.0 + EH / (2.0*kBT));
-       h_n *= exp(-EH/kBT);
-  // Determine heating rate for H atoms colliding with grains
-  // This is derived from Eq 2 of DW81
-  Real H_coll = 1.26e-19 * SQR(a) * pow(T,1.5) * nH * h_n;
-
-  // Determine heating rate due to incident electrons
-  // Approximation in EQ A13 of DW81 used, this can be off
-  // by around 10%, but is nearly 2,000x faster than a
-  // simple trap rule integration with 400 components and
-  // uses almost no memory.
-
+  // Determine heating rate from individual grain due to colliding atoms
+  Real H_coll = 0.0;  // Heating rate, erg s^-1
+  Real nT     = 0.0;  // Total number density, cm^-3
+  for (int n = 0 ; n < 3 ; n++) {
+    // Calculate number density for element
+    n_E[n] = rhoG * xyz[n] / m_E[n];
+    // Calculate total number density
+    nT += n_E[n]; 
+    // Calculate the critical energy of incident hydrogen atoms
+    Real EC = E_E[n] * a;  
+    // Calculate h_n (Grain heating efficiency due to atoms)
+    Real h_n = 1.0 - (1.0 + EC / (2.0 * kBT)) * exp(-EC/kBT);
+    // Calculate heating rate of element, Eq 2 of DW81
+    H_E[n]  = 1.26e-19 * SQR(a) * pow(T,1.5) * n_E[n] * h_n;
+    H_E[n] /= sqrt(m_E[n]/massh);
+    H_coll += H_E[n];  // Add to counter
+  }
+  // Determine heating rate due to colliding electrons
+  // Approximation from Eq A12 of DW81 used for calculating electron-grain
+  // "transparency", this can be off by up to 1%, but is nearly 2,000x
+  // faster than a trap rule integration with 400 components and
+  // uses almost no memory
+  // Assuming single ionisation, calculate electron number density
+  Real ne = nT;
   // Calculate the critical energy for electron to penetrate grain
   // This makes the assumption of an uncharged dust grain, Ee = Ec
-  Real Ee  = 23.0 * pow(a,2.0/3.0); // DW81 Eq A6
-       Ee *= keV_to_erg;
-  Real x_e = Ee/kBT;
-  // Calculate efficiency due to grain transparency of electron collisions
-  // This calculation is more involved for electrons, so approximation is used
-  Real h_e = func_h_e(x_e);
+  Real Ee  = 3.6850063e-08 * pow(a,2.0/3.0);  // DW81 Eq A6
+  Real x_e = Ee/kBT;                          // DW81 Eq A11
+  // Approximate electron-grain "transparency"
+  Real h_e = Calc_h_e(x_e);                   // DW81 Eq A12
   // Calculate heating rate of electrons, using DW81 Eq 2
-  Real H_el = 1.26e-19 * SQR(a) * pow(T,1.5) * ne * h_e / sqrt(masse/massh);
-  // Calculate normalised cooling function
-  Real lambda = (H_coll + H_el) / nH;
+  Real H_el  = 1.26e-19 * SQR(a) * pow(T,1.5) * ne * h_e;
+       H_el /= sqrt(masse/massh);
+  // Summate heating rates and normalise by nd*np
+  Real lambda = (H_coll + H_el) / nT;
   // Finish up and return!
   return lambda;
 }
@@ -718,20 +725,19 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
   for (int k = pmb->ks; k <= pmb->ke; ++k){
     for (int j = pmb->js; j <= pmb->je; ++j){
       for (int i = pmb->is; i <= pmb->ie; ++i){
-
-        Real rho = cons(IDN, k, j, i);
-        Real u1 = cons(IM1, k, j, i) / rho;
-        Real u2 = cons(IM2, k, j, i) / rho;
-        Real u3 = cons(IM3, k, j, i) / rho;
-        Real v = std::sqrt(u1 * u1 + u2 * u2 + u3 * u3);
-        Real ke = 0.5 * rho * v * v;
-        Real ie = cons(IEN, k, j, i) - ke;
-        Real pre = gmma1 * ie;
+        Real rho  = cons(IDN, k, j, i);
+        Real u1   = cons(IM1, k, j, i) / rho;
+        Real u2   = cons(IM2, k, j, i) / rho;
+        Real u3   = cons(IM3, k, j, i) / rho;
+        Real v    = std::sqrt(u1 * u1 + u2 * u2 + u3 * u3);
+        Real ke   = 0.5 * rho * v * v;
+        Real ie   = cons(IEN, k, j, i) - ke;
+        Real pre  = gmma1 * ie;
         Real temp = pre * avgmass / (rho * boltzman);
 
         Real tempold = temp;
         Real logtemp = std::log10(temp);
-        Real rhomh = rho / massh;
+        Real rhomh   = rho / massh;
 
         // Dust parameters, left empty unless dust cooling enabled
         Real a;      // Grain radius (micron) 
@@ -814,7 +820,7 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
             // Calculate cooling rate due to dust
             // Uses a separate function as it is quite involved
             if (dust_cool) {
-              Real lambdaDust = CalcLambdaDust(nH,a,temp);
+              Real lambdaDust = CalcLambdaDust(nH,a,temp,wrxyz);
               Real edotDust   = nD * nH * lambdaDust;
               // Add result to cooling total
               total_cool += edotDust;
@@ -1303,72 +1309,66 @@ void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,Real gmma1,At
   AthenaArray<Real> pre(ke+1,je+1,ie+1);
   AthenaArray<Real> scrch(ie+1), dis(ie+1), drhox(ie+1), drhoy(ie+1), drhoz(ie+1);
   
-  for (int k = ks; k <= ke; k++){
-    for (int j = js; j <= je; j++){
-      for (int i = is; i <= ie; i++){
+  for (int k = ks; k <= ke; k++) {
+    for (int j = js; j <= je; j++) {
+      for (int i = is; i <= ie; i++) {
         Real rho = cons(IDN,k,j,i);
-	Real u1  = cons(IM1,k,j,i)/rho; 
-	Real u2  = cons(IM2,k,j,i)/rho; 
-	Real u3  = cons(IM3,k,j,i)/rho;
-	Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	Real ie = cons(IEN,k,j,i) - ke;
-	pre(k,j,i) = gmma1*ie;
+        Real u1  = cons(IM1,k,j,i)/rho; 
+        Real u2  = cons(IM2,k,j,i)/rho; 
+        Real u3  = cons(IM3,k,j,i)/rho;
+        Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
+        Real ie = cons(IEN,k,j,i) - ke;
+        pre(k,j,i) = gmma1*ie;
       }
     }
   }
   
-  for (int k = ks; k <= ke; k++){
+  for (int k = ks; k <= ke; k++) {
     int ktp = std::min(k+1,ke);
     int kbt = std::max(k-1,ks);
-    for (int j = js; j <= je; j++){
-
+    for (int j = js; j <= je; j++) {
       // Locate cloud interfaces => dis = 1, otherwise, dis = -1
-
       int jtp = std::min(j+1,je);
       int jbt = std::max(j-1,js);
-      for (int i = is+1; i < ie; i++){
-	scrch(i) = std::min(cons(IDN,k,j,i+1),cons(IDN,k,j,i-1));
-	drhox(i) = cons(IDN,k,j,i+1) - cons(IDN,k,j,i-1);
+      for (int i = is+1; i < ie; i++) {
+        scrch(i) = std::min(cons(IDN,k,j,i+1),cons(IDN,k,j,i-1));
+        drhox(i) = cons(IDN,k,j,i+1) - cons(IDN,k,j,i-1);
         drhox(i) = std::copysign(drhox(i),(pre(k,j,i-1)/cons(IDN,k,j,i-1)
-			     - pre(k,j,i+1)/cons(IDN,k,j,i+1)))/scrch(i) - 2;
-	if (nd > 1){
-  	  scrch(i) = std::min(cons(IDN,k,jtp,i),cons(IDN,k,jbt,i));
-	  drhoy(i) = cons(IDN,k,jtp,i) - cons(IDN,k,jbt,i);
+                   - pre(k,j,i+1)/cons(IDN,k,j,i+1)))/scrch(i) - 2;
+        if (nd > 1) {
+          scrch(i) = std::min(cons(IDN,k,jtp,i),cons(IDN,k,jbt,i));
+          drhoy(i) = cons(IDN,k,jtp,i) - cons(IDN,k,jbt,i);
           drhoy(i) = std::copysign(drhoy(i),(pre(k,jbt,i)/cons(IDN,k,jbt,i)
-			     - pre(k,jtp,i)/cons(IDN,k,jtp,i)))/scrch(i) - 2;
+                     - pre(k,jtp,i)/cons(IDN,k,jtp,i)))/scrch(i) - 2;
         }
-	if (nd == 3){
-  	  scrch(i) = std::min(cons(IDN,ktp,j,i),cons(IDN,kbt,j,i));
-	  drhoz(i) = cons(IDN,ktp,j,i) - cons(IDN,kbt,j,i);
+        if (nd == 3) {
+          scrch(i) = std::min(cons(IDN,ktp,j,i),cons(IDN,kbt,j,i));
+          drhoz(i) = cons(IDN,ktp,j,i) - cons(IDN,kbt,j,i);
           drhoz(i) = std::copysign(drhoz(i),(pre(kbt,j,i)/cons(IDN,kbt,j,i)
-			     - pre(ktp,j,i)/cons(IDN,ktp,j,i)))/scrch(i) - 2;
+                     - pre(ktp,j,i)/cons(IDN,ktp,j,i)))/scrch(i) - 2;
         }
-	if      (nd == 1) dis(i) = drhox(i);
-	else if (nd == 2) dis(i) = std::max(drhox(i),drhoy(i));
-	else              dis(i) = std::max(drhox(i),std::max(drhoy(i),drhoz(i)));
+        if      (nd == 1) dis(i) = drhox(i);
+        else if (nd == 2) dis(i) = std::max(drhox(i),drhoy(i));
+        else              dis(i) = std::max(drhox(i),std::max(drhoy(i),drhoz(i)));
       }
       dis(is) = -1.0;
       dis(ie) = -1.0;
 
-      for (int i = is; i <= ie; i++){
-	int itp = std::min(i+1,ie);
-	int ibt = std::max(i-1,is);
-	if (dis(i) > 0.0){
-  	  if      (nd == 1) scrch(i) = std::min(dei(k,j,ibt),dei(k,j,itp));
-	  else if (nd == 2) scrch(i) = std::min(dei(k,j,ibt),std::min(dei(k,j,itp),
-					  std::min(dei(k,jtp,i),dei(k,jbt,i))));
+      for (int i = is; i <= ie; i++) {
+        int itp = std::min(i+1,ie);
+        int ibt = std::max(i-1,is);
+        if (dis(i) > 0.0) {
+          if      (nd == 1) scrch(i) = std::min(dei(k,j,ibt),dei(k,j,itp));
+          else if (nd == 2) scrch(i) = std::min(dei(k,j,ibt),std::min(dei(k,j,itp),
+                                       std::min(dei(k,jtp,i),dei(k,jbt,i))));
           else              scrch(i) = std::min(dei(k,j,ibt),std::min(dei(k,j,itp),
-				     std::min(dei(k,jtp,i),std::min(dei(k,jbt,i),
-				     std::min(dei(ktp,j,i),dei(kbt,j,i))))));
-	  //std::cout << "k = " << k << "; j = " << j << "; i = " << i << "; scrch = " << scrch(i) << "; dei = " << dei(k,j,i) << "\n";
-	  //exit(EXIT_SUCCESS);
-	  dei(k,j,i) = scrch(i);
-	}
+                                       std::min(dei(k,jtp,i),std::min(dei(k,jbt,i),
+                                       std::min(dei(ktp,j,i),dei(kbt,j,i))))));
+          dei(k,j,i) = scrch(i);
+        }
       }
-
     } // j loop
   } // k loop
-  
   return;
 }
 
@@ -1381,38 +1381,30 @@ void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,Real gmma1,At
  *   \version 1.0-stable (Evenstar):
  *   \date Last modified: 13.09.11 (JMP)
  */
-void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons){
-  
+void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons) {
   for (int k = ks; k <= ke; k++){
     for (int j = js; j <= je; j++){
       for (int i = is; i <= ie; i++){
-        
         Real rho = cons(IDN,k,j,i);
-	Real u1  = cons(IM1,k,j,i)/rho; 
-	Real u2  = cons(IM2,k,j,i)/rho; 
-	Real u3  = cons(IM3,k,j,i)/rho;
-	Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
-
-        //col  = prim[iqal0][k][j][i];   // (=1.0 for solar, 0.0 for WC)
-
-	//if (col > 0.5) avgm = stavgm[0][0];
+	      Real u1  = cons(IM1,k,j,i)/rho; 
+	      Real u2  = cons(IM2,k,j,i)/rho; 
+	      Real u3  = cons(IM3,k,j,i)/rho;
+	      Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
+	      Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
+        //col  = prim[iqal0][k][j][i];
+        // (=1.0 for solar, 0.0 for WC)
+      	//if (col > 0.5) avgm = stavgm[0][0];
         //else           avgm = stavgm[1][0]; 
         Real avgm = avgmass;
-	
         //if (col <= 0.5) dei[k][j][i] = 0.0;
-     
-	Real const_1 = avgm/boltzman;
-
-	Real tmpold = const_1 * pre / rho;
-	Real dtemp = dei(k,j,i)/rho;
-	Real tmpnew = std::max((tmpold-dtemp),tmin);
-	tmpnew = std::min(tmpnew,tmax);
+        Real const_1 = avgm/boltzman;
+        Real tmpold = const_1 * pre / rho;
+        Real dtemp = dei(k,j,i)/rho;
+        Real tmpnew = std::max((tmpold-dtemp),tmin);
+        tmpnew = std::min(tmpnew,tmax);
         Real pnew = tmpnew * rho / const_1;
-
         // Update conserved values
         cons(IEN, k, j, i) = ke + pnew / gmma1;
-
       } // i loop
     }   // j loop
   }     // k loop
@@ -1452,11 +1444,11 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
       for (int i=pmb->is; i<=pmb->ie; ++i) {
         //cout << "i = " << i << "; j = " << j << "; k = " << k << "\n";
         Real xc = pmb->pcoord->x1v(i) - xpos1;
-	Real xc2 = xc*xc;
-	Real r2 = xc2 + yc2 + zc2;
+	      Real xc2 = xc*xc;
+	      Real r2 = xc2 + yc2 + zc2;
 
-	Real rho = cons(IDN,k,j,i);
-	Real nH = rho*(10.0/14.0)/massh;           // solar with 10 H per 1 He, avg nucleon mass mu_nu = 14/11. 
+	      Real rho = cons(IDN,k,j,i);
+	      Real nH = rho*(10.0/14.0)/massh;  // solar with 10 H per 1 He, avg nucleon mass mu_nu = 14/11. 
         Real ntot = 1.1*nH;                        // total nucleon number density
         Real z = pmb->pscalars->s(1,k,j,i)/rho;    // dust mass fraction
         Real rhod = rho*z;                         // dust mass density (g/cm^3)
@@ -1464,64 +1456,62 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
         Real a = (pmb->pscalars->s(2,k,j,i)/rho)*1.0e-4; // grain radius (cm)
         Real massD = (4.0/3.0)*pi*std::pow(a,3)*dens_g; // grain mass (g)
 
-	Real nD = rhod/massD;                      // grain number density (cm^-3)
+	      Real nD = rhod/massD;                      // grain number density (cm^-3)
 
-	Real u1  = cons(IM1,k,j,i)/rho; 
-	Real u2  = cons(IM2,k,j,i)/rho; 
-	Real u3  = cons(IM3,k,j,i)/rho;
-	Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
-	Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
+	      Real u1  = cons(IM1,k,j,i)/rho; 
+	      Real u2  = cons(IM2,k,j,i)/rho; 
+	      Real u3  = cons(IM3,k,j,i)/rho;
+	      Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
+	      Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
 
         Real col = pmb->pscalars->s(0,k,j,i)/rho;  // wind colour (1.0 for primary wind, 0.0 for secondary wind)
 	
         //col  = prim[iqal0][k][j][i];   // (=1.0 for solar, 0.0 for WC)
-	//if (col > 0.5) avgm = stavgm[0][0];
+      	//if (col > 0.5) avgm = stavgm[0][0];
         //else           avgm = stavgm[1][0]; 
         Real avgm = avgmass;     
-	Real temp = avgm * pre / (rho*boltzman);
+	      Real temp = avgm * pre / (rho*boltzman);
 
-	// Determine overdensity from smooth WR wind
-	Real rho_smooth =  mdot1/(4.0*pi*r2*vinf1);
-
-
+      	// Determine overdensity from smooth WR wind
+	      Real rho_smooth =  mdot1/(4.0*pi*r2*vinf1);
 	
-	Real rhod_dot = 0.0;
-	Real dadt = 0.0;
+        Real rhod_dot = 0.0;
+        Real dadt = 0.0;
 	
-	if (temp > 1.0e6 && z > 0.0){
-	  // Dust thermal sputtering
-	  Real tau_d = 3.156e17*a/ntot;            // grain destruction time (s)
-	  dadt = -a/tau_d;
-	  rhod_dot = -1.33e-17*dens_g*a*a*ntot*nD; // dust destruction rate (g cm^-3 s^-1)
-	}
-	else if (temp < 1.4e4){
-	  // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
-	  Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
-	  dadt = 0.25*eps_a*rho*wa/dens_g;
-	  rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
-	  //if (rho > 2.0*rho_smooth && col > 0.5){
-	    // In cool WCR
-	    //std::cout << "Growing grains inside WCR...\n";
-	    //std::cout << "dadt = " << dadt << "; nD = " << nD << " (cm^-3); rhod_dot = " << rhod_dot << "\n";
-	    //std::cout << "Aborting!\n";
-	    //exit(EXIT_SUCCESS);
-	  //}
-	}
-	if (rhod_dot != 0.0){
-	  Real drhod = rhod_dot*dt;
-	  Real rhodnew = std::max(minimumDustToGasMassRatio*rho,rhod + drhod);    // new dust density
-	  Real rhonew = rho + (rhod - rhodnew);                                   // new gas  density (preserving total mass)
-	  cons(IDN,k,j,i) = rhonew;
-	  // Update the conserved wind colour (as the gas density may have changed)
-	  pmb->pscalars->s(0,k,j,i) = col*rhonew;
-	  // Update the dust to gas mass ratio
-	  pmb->pscalars->r(1,k,j,i) = rhodnew/rhonew;
-	  pmb->pscalars->s(1,k,j,i) = pmb->pscalars->r(1,k,j,i)*rhonew;
-	  // Update the grain radius
-	  Real anew = std::max(minimumGrainRadiusMicrons,(a + dadt*dt)/1.0e-4); // (microns)
-	  pmb->pscalars->r(2,k,j,i) = anew;
-	  pmb->pscalars->s(2,k,j,i) = anew*rhonew;
-	}
+        if (temp > 1.0e6 && z > 0.0){
+          // Dust thermal sputtering
+          Real tau_d = 3.156e17*a/ntot;            // grain destruction time (s)
+          dadt = -a/tau_d;
+          rhod_dot = -1.33e-17*dens_g*a*a*ntot*nD; // dust destruction rate (g cm^-3 s^-1)
+        }
+        else if (temp < 1.4e4){
+          // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
+          Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
+          dadt = 0.25*eps_a*rho*wa/dens_g;
+          rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+          //if (rho > 2.0*rho_smooth && col > 0.5){
+            // In cool WCR
+            //std::cout << "Growing grains inside WCR...\n";
+            //std::cout << "dadt = " << dadt << "; nD = " << nD << " (cm^-3); rhod_dot = " << rhod_dot << "\n";
+            //std::cout << "Aborting!\n";
+            //exit(EXIT_SUCCESS);
+          //}
+        }
+        if (rhod_dot != 0.0){
+          Real drhod = rhod_dot*dt;
+          Real rhodnew = std::max(minimumDustToGasMassRatio*rho,rhod + drhod);    // new dust density
+          Real rhonew = rho + (rhod - rhodnew);                                   // new gas  density (preserving total mass)
+          cons(IDN,k,j,i) = rhonew;
+          // Update the conserved wind colour (as the gas density may have changed)
+          pmb->pscalars->s(0,k,j,i) = col*rhonew;
+          // Update the dust to gas mass ratio
+          pmb->pscalars->r(1,k,j,i) = rhodnew/rhonew;
+          pmb->pscalars->s(1,k,j,i) = pmb->pscalars->r(1,k,j,i)*rhonew;
+          // Update the grain radius
+          Real anew = std::max(minimumGrainRadiusMicrons,(a + dadt*dt)/1.0e-4); // (microns)
+          pmb->pscalars->r(2,k,j,i) = anew;
+          pmb->pscalars->s(2,k,j,i) = anew*rhonew;
+        }
       }
     }
   }
