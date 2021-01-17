@@ -28,6 +28,7 @@
 // C headers
 
 // C++ headers
+#include <algorithm>  // upper_bound() used for fast binary search
 #include <cmath>      // sqrt()
 #include <fstream>
 #include <iostream>   // endl
@@ -62,10 +63,10 @@ bool dust_cool;
 Real initialDustToGasMassRatio;
 Real initialGrainRadiusMicrons;
 // Stellar properties
-Real mass1, mass2;                // Mass, msol
-Real mdot1, mdot2;                // Mass loss rates, msol yr^-1
-Real vinf1, vinf2;                // Terminal veloicites, cm s^-1
-Real wrxyz[3], obxyz[3];          // Metallicites, in the form x,y,z
+Real mass1, mass2;  // Mass, msol
+Real mdot1, mdot2;  // Mass loss rates, msol yr^-1
+Real vinf1, vinf2;  // Terminal veloicites, cm s^-1
+Real xyz[2][3];     // Metallicites, in the form x,y,z for WR and OB stars
 Real remapRadius1, remapRadius2;  // Remap radii (cm)
 // Orbital positions
 Real xpos1, xpos2, ypos1, ypos2, zpos1, zpos2;  // Star positions from barycenter
@@ -95,6 +96,7 @@ const Real minimumGrainRadiusMicrons = 0.0001;
 const Real grainBulkDensity = 3.0;                       // (g/cm^3)
 const Real Twind = 1.0e4;                                // K
 const Real avgmass = 1.0e-24;     // g
+// Structure to store ga
 // Structure to store gas cooling curve data
 struct coolingCurve{
   int ntmax;  // Number of bins in cooling curve 
@@ -102,9 +104,118 @@ struct coolingCurve{
   std::vector<double> logt,lambdac,te,loglambda;
   double t_min,t_max,logtmin,logtmax,dlogt;
 };
+
+
+//! \class CoolCurve
+//  \brief A self-initialising class containing cooling curves used in CWB problem
+//         with cooling enabled.
+//  - Cooling is stored as a b
+//  - Binary search and linear interpolation is used to derive cooling parameter Lambda
+//    which is then used to calculate energy loss using the formulae
+//      dE/dt = nG^2 * Lambda(T)
+//  - Where nG is the gas number density.
+
+class CoolCurve {
+  public:
+    // Variables
+    std::vector<Real> temp;    // Temperature (K)
+    std::vector<Real> lambda;  // Energy loss constant
+    Real tmin, tmax;  // Values of first and last index in temperature
+    Real lmin, lmax;  // Values of first and last index in lambda
+    // Functions
+    int  Init(std::string coolCurveFileName);
+    Real FindLambda(Real t);
+};
+
+//! \fn Init
+//  \brief Initialise cooling curve by reading in a space separated file
+//  each line containing a pair of values, temperature and lambda.
+//  Each line is then read into the appropriate vector.
+//  Function checks for validity of file, as well as simple check to determine
+//  if vectors are the same length.
+
+int CoolCurve::Init(std::string coolCurveFileName) {
+  std::ifstream file(coolCurveFileName);
+  if (!file) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in cwb.cpp CoolCurve::Init" <<
+           std::endl <<
+           "File " <<
+           coolCurveFileName <<
+           " Cannot be read!" <<
+           std::endl;
+    ATHENA_ERROR(msg);
+    return 1;
+  }
+  else {
+    Real tbuf,lbuf;
+    std::string line;
+    file.seekg(0);
+    while (!file.eof()) {
+      file >> tbuf >> lbuf;
+      if (lbuf == tbuf) {break;}
+      temp.push_back(tbuf);
+      lambda.push_back(lbuf);
+    }
+  }
+  // Convert log(T) to T
+  for (int n = 0; n < temp.size(); n++) {
+    temp[n] = pow(10.0,temp[n]);
+  }
+  // Compare lengths of vectors, if they are not the same, import has failed
+  if (temp.size() != lambda.size()) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in cwb.cpp CoolCurve::Init" <<
+           std::endl <<
+           "Import has failed, mismatch in temperature and lambda vector size" <<
+           std::endl;
+    ATHENA_ERROR(msg);
+  }
+  tmin = temp.front();
+  tmax = temp.back();
+  lmin = lambda.front();
+  lmax = lambda.back();
+  if (tmax < tmin) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in cwb.hpp CoolCurve::Init" <<
+           std::endl <<
+           "Import has failed, Data does not appear to be sorted!" <<
+           std::endl;
+    ATHENA_ERROR(msg);
+  }
+  return 0;
+}
+
+//! \fn FindLambda
+// Perform a binary search to find first temperature in cooling curve > input temperature, tu
+// Function then performs a linear interpolation between tu and the previous temperature in index, tl, to find the interpolated value for lambda
+// Fast, but not particularly accurate at lower temperatures
+// Uses C++ algorithm library
+Real CoolCurve::FindLambda(Real t) {
+  // Quickly return values that would cause search to fail
+  if      (t <= tmin) {return 0.0;}
+  else if (t >= tmax) {return lmax;}
+  // Perform binary search
+  auto upper = std::upper_bound(temp.begin(),temp.end(),t);
+  // Assign indexes based on search
+  int  iu    = std::distance(temp.begin(), upper);
+  int  il    = iu - 1;
+  // Perform linear interpolation
+  // Assign values from each array from indexes found by binary search
+  Real tl = temp[il];
+  Real tu = temp[iu];
+  Real ll = lambda[il];
+  Real lu = lambda[iu];
+  // Calculate interpolated value of lambda
+  Real l = ll + ((t - tl) * ((lu - ll) / (tu - tl)));
+  return l;
+}
+
+// Define two cooling curves, one for each star
+CoolCurve cc[2];
+
 // JWE prototypes
 Real Calc_h_e(Real x_e);  // Calculate electron heating efficiency
-Real CalcLambdaDust(Real nH, Real a, Real T, Real xyz[]);  // Calculate dust cooling parameter
 // JMP prototypes
 void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons);
 // History user functions
@@ -138,13 +249,13 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   vinf1 = pin->GetReal("problem","vinf1");
   vinf2 = pin->GetReal("problem","vinf2");
   // Read in WR wind mass fractions
-  wrxyz[0] = pin->GetReal("problem","x1");
-  wrxyz[1] = pin->GetReal("problem","y1");
-  wrxyz[2] = pin->GetReal("problem","z1");
+  xyz[0][0] = pin->GetReal("problem","x1");
+  xyz[0][1] = pin->GetReal("problem","y1");
+  xyz[0][2] = pin->GetReal("problem","z1");
   // Read in OB wind mass fractions
-  obxyz[0] = pin->GetReal("problem","x2");
-  obxyz[1] = pin->GetReal("problem","y2");
-  obxyz[2] = pin->GetReal("problem","z2");
+  xyz[1][0] = pin->GetReal("problem","x2");
+  xyz[1][1] = pin->GetReal("problem","y2");
+  xyz[1][2] = pin->GetReal("problem","z2");
   // Remap radius, typically set to 5-10x finest cell radius
   remapRadius1 = pin->GetReal("problem","remapRadius1");
   remapRadius2 = pin->GetReal("problem","remapRadius2");
@@ -205,8 +316,17 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     initialGrainRadiusMicrons = pin->GetReal("problem","initialGrainRadiusMicrons");
   }
 
-  mdot1 *= Msol/yr;
+  // Convert values into CGS
+  mdot1 *= Msol/yr; 
   mdot2 *= Msol/yr;
+
+  // Read in cooling curves
+  if (cool) {
+    std::string WRCoolCurveFileName = pin->GetString("problem","WRCoolCurve");
+    std::string OBCoolCurveFileName = pin->GetString("problem","OBCoolCurve");
+    cc[0].Init(WRCoolCurveFileName);
+    cc[1].Init(OBCoolCurveFileName);
+  }
 
   // Note: it is only possible to have one source functions enrolled by the user.
   EnrollUserExplicitSourceFunction(PhysicalSources);
@@ -566,22 +686,23 @@ Real Calc_h_e(Real x_e) {
 }
 
 //! \fn Real CalcLambdaDust(Real nH, Real a, Real T)
-//  \brief Calculate lambda, the normalised energy loss rate due to dust
+//  \brief Calculate energy loss per dust grain, multiply by nD to calculate
+//         cell cooling rate
 //         - Energy lost from the gas flow due to dust is mainly due to
 //           collisional heating of the dust particles from atoms and
 //           electrons
 //         - Efficiency losses can occur at high temperatures as particles
 //           are so energetic they pass through one another
 //         - This function approximates this effect
-//         - Resultant value normalised, to find energy loss in erg/s/cm^3
-//           value must be multiplied by nP*nD
+//         - Resultant value for single grain, to find energy loss in erg/s/cm^3
+//           value must be multiplied by nD
 //         Derived from:
 //         Dwek, E., & Werner, M. W. (1981).
 //         The Infrared Emission From Supernova Condensates.
 //         The Astrophysical Journal, 248, 138.
 //         https://doi.org/10.1086/159138
 
-Real CalcLambdaDust(Real rhoG, Real a, Real T, Real xyz[]) {
+Real CalcGrainCoolRate(Real rhoG, Real a, Real T, int nc) {
   // === Setup ===
   // Shorten temp * boltzmann constant to kBT, as this is used a lot  
   Real kBT = boltzman * T;
@@ -603,7 +724,7 @@ Real CalcLambdaDust(Real rhoG, Real a, Real T, Real xyz[]) {
   Real nT     = 0.0;  // Total number density, cm^-3
   for (int n = 0 ; n < 3 ; n++) {
     // Calculate number density for element
-    n_E[n] = rhoG * xyz[n] / m_E[n];
+    n_E[n] = rhoG * xyz[nc][n] / m_E[n];
     // Calculate total number density
     nT += n_E[n]; 
     // Calculate the critical energy of incident hydrogen atoms
@@ -632,16 +753,167 @@ Real CalcLambdaDust(Real rhoG, Real a, Real T, Real xyz[]) {
   Real H_el  = 1.26e-19 * SQR(a) * pow(T,1.5) * ne * h_e;
        H_el /= sqrt(masse/massh);
   // Summate heating rates and normalise by nd*np
-  Real lambda = (H_coll + H_el) / nT;
+  Real edotGrain = (H_coll + H_el);
   // Finish up and return!
-  return lambda;
+  return edotGrain;
+}
+
+//! \fn void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons)
+//  \brief Reduce energy in simulation to simulate cooling through gas and dust emission
+//         - Gas cooling is handled through a cooling curve
+//           - Cooling curve stored as lookup table, binary search and interpolation
+//             are performed in order to improve accuracy
+//         - Dust cooling is estimated through Dwek Werner prescription, see function
+//           CalcGrainCoolRate()
+//         - Simple checks are performed to ensure that results are sensible
+//         - Adaptive cooling look is used to determine the change in total temperature
+//         - This is then used to calculate average energy loss over hydro timestep
+//         - This is then integrated and used to recalculate conserved arrays, modifying
+//           the total cell energy
+
+void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
+  const int ncool = 2;  // Number of cooling curves
+  // Calculate gamma, shorten gamma-1 to a constant
+  const Real gamma = pmb->peos->GetGamma();
+  const Real g1    = gamma - 1.0;
+  // Build an array to store 
+  AthenaArray<Real> dEintArray(pmb->ke+1,pmb->je+1,pmb->ie+1);
+  // Iterate through meshblocks array, calculating cooling rates
+  for (int k = pmb->ks; k <= pmb->ke; ++k) {
+    for (int j = pmb->js; j <= pmb->je; ++j) {
+      for (int i = pmb->is; i <= pmb->ie; ++i) {
+        // Import conserved variables
+        Real rho  = cons(IDN,k,j,i);        // Gas density (g cm^-3)
+        Real u1   = cons(IM1,k,j,i) / rho;  // x velocity (cm s^-1)
+        Real u2   = cons(IM2,k,j,i) / rho;  // y velocity (cm s^-1)
+        Real u3   = cons(IM3,k,j,i) / rho;  // z velocity (cm s^-1)
+        Real Et   = cons(IEN,k,j,i);        // Total energy (erg)
+        // Import wind "colour"
+        Real col  = pmb->pscalars->s(0,k,j,i) / rho;
+        // Calculate gas parameters from conserved variables
+        Real v    = std::sqrt(SQR(u1)+SQR(u2)+SQR(u3));  // Gas velocity (cm s^-1)
+        Real kE   = 0.5 * rho * SQR(v);                  // Kinetic energy (erg)
+        Real ie   = Et - kE;                             // Internal energy (erg)
+        Real P    = g1 * ie;                             // Gas pressure (Ba)
+        Real Ti   = P * avgmass / (rho*boltzman);      // Initial temperature (K)
+        // Convert wind "colour" to an array form
+        Real windCol[2] = {0.0,0.0};  // Initialise array
+        windCol[0] = col;             // WR wind mass fraction
+        windCol[1] = 1.0 - col;       // OB wind mass fraction
+        // Set up cooling loop variables
+        Real T      = Ti;              // Current temperature (K)
+        Real rhomH2 = SQR(rho/massh);  // Plasma cooling curve constant (cm^-6)
+        // Set up dust cooling variables
+        Real a;     // Grain radius (micron)
+        Real aCGS;  // Grain radius (cm)
+        Real z;     // Dust-to-gas mass ratio
+        Real nT;    // Total number density (cm^-3)
+        Real nD;    // Dust number density (cm^-3)
+        // Calculate dust cooling variables
+        if (dust_cool) {
+          z = pmb->pscalars->s(ZLOC,k,j,i) / rho;
+          a = pmb->pscalars->s(ZLOC,k,j,i) / rho;
+          // Convert a in microns to CGS units, cm
+          aCGS = a * 1e-4;
+          // Calculate dust grain number density 
+          Real rhoD  = rho * z;
+          Real volD  = (4.0/3.0) * PI * CUBE(aCGS);
+          Real massD = grainBulkDensity * volD;
+          // Finish nD calculation
+          nD = rhoD / massD;
+        }
+        // If the temperature is close to the wind temperature
+        // cool to the wind temperature to save time by bypassing
+        // cooling loop
+        if (T < 1.5 * Twind) {
+          T = Twind;
+        }
+        // Otherwise, begin the cooling loop
+        else {
+          // Initialise cooling variables
+          Real dtInt = 0.0;  // Amount of timestep integrated (s)
+          // Perform cooling step in loop
+          while (dtInt < dt) {            
+            // Initialise loop cooling arrays
+            Real lambdaWind[2] = {0.0,0.0};  // Gas cooling parameter
+            Real edotGas[2]    = {0.0,0.0};  // Gas cooling energy loss rate (erg/s)
+            Real edotDust[2]   = {0.0,0.0};  // Dust cooling energy loss rate (erg/s)
+            Real edotWind[2]   = {0.0,0.0};  // Total wind energy loss rate (erg/s)
+            Real totalCool     = 0.0;        // Total cooling rate (erg/s)
+            for (int nc = 0; nc < 2; ++nc) {
+              // Calculate cooling contribution to plasma
+              lambdaWind[nc] = cc[nc].FindLambda(T);
+              edotGas[nc]    = rhomH2 * lambdaWind[nc];
+              if (dust_cool) {
+                // Calculate cooling contribution to 
+                Real edotGrain = CalcGrainCoolRate(rho,a,T,nc);
+                edotDust[nc]   = nD * edotGrain;
+              }
+              // Add individual contributions to total array
+              edotWind[nc] += edotGas[nc];
+              edotWind[nc] += edotDust[nc];
+              // Multiply by wind colour to find wind contribution in cell
+              edotWind[nc] *= windCol[nc];
+              // Add to total energy lost in loop iteration
+              totalCool += edotWind[nc];
+            }
+            // Calculate timestep interval
+            Real Eint   = P / g1;             // Current internal energy
+            Real tCool  = Eint / totalCool;     // Cooling time (s)
+            Real dtCool = 0.1 * abs(tCool);  // Timestep, based on cooling time
+            if ((dtInt + dtCool) > dt) {
+              dtCool = dt - dtInt;  // 
+            }
+            dtInt += dtCool;  // Update total integrated time
+            // Calculate new temperature and update pressure
+            Real dEint = -totalCool * dtCool;
+            Real TNew  = T * (Eint + dEint) / Eint;
+            // Check to see if new temperature has reached lower or upper bound
+            TNew = std::max(tmin,TNew);
+            TNew = std::min(TNew,tmax);
+            // Update pressure and temperature
+            P *= TNew / T;
+            T  = TNew;
+          }
+        }
+        // Determine if cooling is sensible
+        // If a solution cannot be found, abandon cooling!
+        // Rejects NaN temperatures, infinite temperatures, or negative temperatures
+        if (std::isnan(T) || std::isinf(T) || T < 0.0) {
+          T = Ti;
+        }
+        // Calculate average rate of change in energy
+        // by calculating 
+        Real dEintAvg = (Ti - T) * rho;
+        dEintArray(k,j,i) = dEintAvg;
+      }
+    }
+  }
+  // Restrict cooling at unresolve interfaces
+  RestrictCool(pmb->is,pmb->ie,
+               pmb->js,pmb->je,
+               pmb->ks,pmb->ke,
+               pmb->pmy_mesh->ndim,
+               g1,
+               dEintArray,
+               cons);
+  // Adjust pressure, performing the actual cooling
+  AdjustPressureDueToCooling(pmb->is,pmb->ie,
+                             pmb->js,pmb->je,
+                             pmb->ks,pmb->ke,
+                             g1,
+                             dEintArray,
+                             cons);
+  // Perform garbage collection and finish
+  dEintArray.DeleteAthenaArray();
+  return;
 }
 
 //========================================================================================
 //! \fn void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
 //  \brief Calculating radiative heating and cooling
 //========================================================================================
-void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
+void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
   const int ncool = 1; // number of cooling curves
 
@@ -819,12 +1091,12 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
             // Calculate cooling rate due to dust
             // Uses a separate function as it is quite involved
-            if (dust_cool) {
-              Real lambdaDust = CalcLambdaDust(nH,a,temp,wrxyz);
-              Real edotDust   = nD * nH * lambdaDust;
-              // Add result to cooling total
-              total_cool += edotDust;
-            }
+            // if (dust_cool) {
+            //   Real edotGrain = CalcGrainCoolRate(rho,a,temp,&xyz[0]);
+            //   Real edotDust  = nD * edotGrain;
+            //   // Add result to cooling total
+            //   total_cool += edotDust;
+            // }
 
             double Eint = pre / gmma1;
             double t_cool = Eint / total_cool;
