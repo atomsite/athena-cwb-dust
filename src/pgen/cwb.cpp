@@ -151,9 +151,9 @@ int CoolCurve::Init(std::string coolCurveFileName) {
     Real tbuf,lbuf;
     std::string line;
     file.seekg(0);
-    while (!file.eof()) {
+    while (true) {
       file >> tbuf >> lbuf;
-      if (lbuf == tbuf) {break;}
+      if(file.eof()) break;
       temp.push_back(tbuf);
       lambda.push_back(lbuf);
     }
@@ -177,7 +177,7 @@ int CoolCurve::Init(std::string coolCurveFileName) {
   lmax = lambda.back();
   if (tmax < tmin) {
     std::stringstream msg;
-    msg << "### FATAL ERROR in cwb.hpp CoolCurve::Init" <<
+    msg << "### FATAL ERROR in cwb.cpp CoolCurve::Init" <<
            std::endl <<
            "Import has failed, Data does not appear to be sorted!" <<
            std::endl;
@@ -193,13 +193,13 @@ int CoolCurve::Init(std::string coolCurveFileName) {
 // Uses C++ algorithm library
 Real CoolCurve::FindLambda(Real t) {
   // Quickly return values that would cause search to fail
-  if      (t <= tmin) {return 0.0;}
+  if      (t <= 1.1*tmin) {return 0.0;}
   else if (t >= tmax) {return lmax;}
   // Perform binary search
   auto upper = std::upper_bound(temp.begin(),temp.end(),t);
   // Assign indexes based on search
-  int  iu    = std::distance(temp.begin(), upper);
-  int  il    = iu - 1;
+  int iu = std::distance(temp.begin(), upper);
+  int il = iu - 1;
   // Perform linear interpolation
   // Assign values from each array from indexes found by binary search
   Real tl = temp[il];
@@ -231,6 +231,7 @@ void OrbitCalc(Real t);
 void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
                   const AthenaArray<Real> &bcc, AthenaArray<Real> &cons);
 void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
+void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons);
 int RefinementCondition(MeshBlock *pmb);
 void RestrictCool(int is,int ie,int js,int je,int ks,int ke,int nd,Real gmma1,AthenaArray<Real> &dei,const AthenaArray<Real> &cons);
 
@@ -658,7 +659,7 @@ void MeshBlock::UserWorkInLoop() {
 void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const AthenaArray<Real> &prim,
 		const AthenaArray<Real> &bcc, AthenaArray<Real> &cons){
 
-  if (cool) RadiateHeatCool(pmb,dt,cons);
+  if (cool) RadiateHeatCoolOld(pmb,dt,cons);
   if (dust) EvolveDust(pmb,dt,cons);
   return;
 }
@@ -776,6 +777,9 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
   // Calculate gamma, shorten gamma-1 to a constant
   const Real gamma = pmb->peos->GetGamma();
   const Real g1    = gamma - 1.0;
+  const Real tmin  = Twind;
+  const Real tmax  = 3.0e9;
+
   // Build an array to store 
   AthenaArray<Real> dEintArray(pmb->ke+1,pmb->je+1,pmb->ie+1);
   // Iterate through meshblocks array, calculating cooling rates
@@ -801,8 +805,9 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
         windCol[0] = col;             // WR wind mass fraction
         windCol[1] = 1.0 - col;       // OB wind mass fraction
         // Set up cooling loop variables
-        Real T      = Ti;              // Current temperature (K)
-        Real rhomH2 = SQR(rho/massh);  // Plasma cooling curve constant (cm^-6)
+        Real T      = Ti;             // Current temperature (K)
+        Real rhomH  = rho / massh;
+        Real rhomH2 = rhomH * rhomH;  // Plasma cooling curve constant (cm^-6)
         // Set up dust cooling variables
         Real a;     // Grain radius (micron)
         Real aCGS;  // Grain radius (cm)
@@ -823,8 +828,7 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
           nD = rhoD / massD;
         }
         // If the temperature is close to the wind temperature
-        // cool to the wind temperature to save time by bypassing
-        // cooling loop
+        // cool to the wind temperature to save time by bypassing cooling loop
         if (T < 1.5 * Twind) {
           T = Twind;
         }
@@ -857,9 +861,12 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
               // Add to total energy lost in loop iteration
               totalCool += edotWind[nc];
             }
+
+            if (totalCool > 0) std::cout << totalCool << " " << rhomH << " " << T <<  " " << lambdaWind[0] << "\n";
+
             // Calculate timestep interval
-            Real Eint   = P / g1;             // Current internal energy
-            Real tCool  = Eint / totalCool;     // Cooling time (s)
+            Real Eint   = P / g1;            // Current internal energy
+            Real tCool  = Eint / totalCool;  // Cooling time (s)
             Real dtCool = 0.1 * abs(tCool);  // Timestep, based on cooling time
             if ((dtInt + dtCool) > dt) {
               dtCool = dt - dtInt;  // 
@@ -906,6 +913,9 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
                              cons);
   // Perform garbage collection and finish
   dEintArray.DeleteAthenaArray();
+
+  std::cout << "Completed another meshblock!\n";
+
   return;
 }
 
@@ -915,7 +925,7 @@ void RadiateHeatCool(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons) {
 //========================================================================================
 void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
-  const int ncool = 1; // number of cooling curves
+  const int ncool = 2; // number of cooling curves
 
   static coolingCurve cc[ncool];
   static bool firstHeatCool = true;
@@ -940,8 +950,10 @@ void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
     // than the second.
     // The cooling_KI02_4.0_CLOUDY_7.6_MEKAL.txt gas cooling rate is lambda*(dens/mH)^2.
     // The dust_lambdaD_solar_a0.1.txt dust cooling rate is lambda_D*np*ne.
-    cc[0].coolCurveFile = "cooling_KI02_4.0_CLOUDY_7.6_MEKAL.txt";
-    cc[0].ntmax = 161;
+    cc[0].coolCurveFile = "cooling_curve_WC";
+    cc[1].coolCurveFile = "cooling_curve_solar";
+    cc[0].ntmax = 101;
+    cc[1].ntmax = 101;
     //#ifdef DUST
     //    cc[1].coolCurveFile = "dust_lambdaD_solar_a0.1.txt";
     //    cc[1].ntmax = 101;
@@ -990,7 +1002,6 @@ void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
     }
   }
 
-
   AthenaArray<Real> dei(pmb->ke+1,pmb->je+1,pmb->ie+1);
   
   // Now loop over cells, calculating the heating/cooling rate
@@ -1010,6 +1021,13 @@ void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
         Real tempold = temp;
         Real logtemp = std::log10(temp);
         Real rhomh   = rho / massh;
+        
+        // Import wind "colour"
+        Real col  = pmb->pscalars->s(0,k,j,i) / rho;
+        // Convert wind "colour" to an array form
+        Real windCol[2] = {0.0,0.0};  // Initialise array
+        windCol[0] = col;             // WR wind mass fraction
+        windCol[1] = 1.0 - col;       // OB wind mass fraction
 
         // Dust parameters, left empty unless dust cooling enabled
         Real a;      // Grain radius (micron) 
@@ -1048,6 +1066,7 @@ void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
             // Loop over all cooling curves (e.g. gas plus dust)
             double lambda_cool_nc[ncool] = {0.0};
+            double totalGasCool = 0.0;
             for (int nc = 0; nc < ncool; ++nc){
             
               double lambda_cool = 0.0;
@@ -1079,11 +1098,13 @@ void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
                 //  std::cout << "kk = " << kk << "; ntmax = " << cc[nc].ntmax << "; lambda_cool = " << lambda_cool << "\n";
                 //}
               }
-              lambda_cool_nc[nc] = lambda_cool;
+              lambda_cool_nc[nc]  = lambda_cool;
+              lambda_cool_nc[nc] *= windCol[nc];
+              totalGasCool += lambda_cool_nc[nc];
             }
 
             // Calculate cooling rate due to gas
-            double edotGas = rhomh * rhomh * lambda_cool_nc[0]; // erg/cm^-3/s
+            double edotGas = rhomh * rhomh * totalGasCool; // erg/cm^-3/s
             double total_cool = edotGas;
             //if (Globals::my_rank == 0 && tempold > 1.0e7){
             //  std::cout << "edotGas = " << edotGas << "; lambda_cool_nc[0] = " << lambda_cool_nc[0] << "\n";
@@ -1091,12 +1112,15 @@ void RadiateHeatCoolOld(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 
             // Calculate cooling rate due to dust
             // Uses a separate function as it is quite involved
-            // if (dust_cool) {
-            //   Real edotGrain = CalcGrainCoolRate(rho,a,temp,&xyz[0]);
-            //   Real edotDust  = nD * edotGrain;
-            //   // Add result to cooling total
-            //   total_cool += edotDust;
-            // }
+            if (dust_cool) {
+              for (int nc = 0; nc < 2; ++nc) {
+                Real edotGrain = CalcGrainCoolRate(rho,a,temp,nc);
+                Real edotDust  = nD * edotGrain;
+                     edotDust *= windCol[nc];
+                // Add result to cooling total
+                total_cool += edotDust;
+              }
+            }
 
             double Eint = pre / gmma1;
             double t_cool = Eint / total_cool;
