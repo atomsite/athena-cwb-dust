@@ -66,7 +66,17 @@ Real initialGrainRadiusMicrons;
 Real mass1, mass2;  // Mass, msol
 Real mdot1, mdot2;  // Mass loss rates, msol yr^-1
 Real vinf1, vinf2;  // Terminal veloicites, cm s^-1
-Real xyz[2][3];     // Metallicites, in the form x,y,z for WR and OB stars
+
+// Array for storing mass fractions, first index is for star, 0 for WR 1 for OB
+// Second index is for specific element in the form:
+// 0: Hydrogen
+// 1: Helium
+// 2: Carbon
+// 3: Nitrogen
+// 4: Oxygen
+// This assumes that 
+Real massFrac[2][5];     // Mass fractions
+
 Real remapRadius1, remapRadius2;  // Remap radii (cm)
 // Orbital positions
 Real xpos1, xpos2, ypos1, ypos2, zpos1, zpos2;  // Star positions from barycenter
@@ -105,6 +115,71 @@ struct coolingCurve{
   double t_min,t_max,logtmin,logtmax,dlogt;
 };
 
+//! \class FreeElectronCurve
+
+class FreeElectronCurve {
+  public:
+    // Variables
+    std::vector<Real> T;
+    std::vector<Real> e;
+    Real TMin,TMax;
+    Real eMin,eMax;
+    int Init(std::string freeElectronFilename);
+};
+
+int FreeElectronCurve::Init(std::string freeElectronFilename) {
+  std::ifstream file(freeElectronFilename);
+  if (!file) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in cwb.cpp freeElectronCurve::Init" <<
+           std::endl <<
+           "File " <<
+           freeElectronFilename <<
+           " Cannot be read!" <<
+           std::endl;
+    ATHENA_ERROR(msg);
+    return 1;
+  }
+  else {
+    Real tbuf,ebuf;
+    std::string line;
+    file.seekg(0);
+    while (true) {
+      file >> tbuf >> ebuf;
+      if(file.eof()) break;
+      T.push_back(tbuf);
+      e.push_back(ebuf);
+    }
+  }
+  // Convert log(T) to T
+  for (int n = 0; n < T.size(); n++) {
+    T[n] = pow(10.0,T[n]);
+  }
+  // Compare lengths of vectors, if they are not the same, import has failed
+  if (T.size() != e.size()) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in cwb.cpp FreeElectronCurve::Init" <<
+           std::endl <<
+           "Import has failed, mismatch in temperature and free elctron vector size" <<
+           std::endl;
+    ATHENA_ERROR(msg);
+  }
+  TMin = T.front();
+  TMax = T.back();
+  eMin = e.front();
+  eMax = e.back();
+  if (TMax < TMin) {
+    std::stringstream msg;
+    msg << "### FATAL ERROR in cwb.cpp FreeElectronCurve::Init" <<
+           std::endl <<
+           "Import has failed, Data does not appear to be sorted!" <<
+           std::endl;
+    ATHENA_ERROR(msg);
+  }
+  return 0;
+}
+
+FreeElectronCurve eCurve[2];
 
 //! \class CoolCurve
 //  \brief A self-initialising class containing cooling curves used in CWB problem
@@ -216,6 +291,7 @@ CoolCurve cc[2];
 
 // JWE prototypes
 Real Calc_h_e(Real x_e);  // Calculate electron heating efficiency
+Real SearchAndInterpolate(Real x, std::vector<Real> xarr, std::vector<Real> yarr);
 // JMP prototypes
 void AdjustPressureDueToCooling(int is,int ie,int js,int je,int ks,int ke,Real gmma1,AthenaArray<Real> &dei,AthenaArray<Real> &cons);
 // History user functions
@@ -250,13 +326,17 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
   vinf1 = pin->GetReal("problem","vinf1");
   vinf2 = pin->GetReal("problem","vinf2");
   // Read in WR wind mass fractions
-  xyz[0][0] = pin->GetReal("problem","x1");
-  xyz[0][1] = pin->GetReal("problem","y1");
-  xyz[0][2] = pin->GetReal("problem","z1");
+  massFrac[0][0] = pin->GetReal("problem","xH1");
+  massFrac[0][1] = pin->GetReal("problem","xHe1");
+  massFrac[0][2] = pin->GetReal("problem","xC1");
+  massFrac[0][3] = pin->GetReal("problem","xN1");
+  massFrac[0][4] = pin->GetReal("problem","xO1");
   // Read in OB wind mass fractions
-  xyz[1][0] = pin->GetReal("problem","x2");
-  xyz[1][1] = pin->GetReal("problem","y2");
-  xyz[1][2] = pin->GetReal("problem","z2");
+  massFrac[1][0] = pin->GetReal("problem","xH2");
+  massFrac[1][1] = pin->GetReal("problem","xHe2");
+  massFrac[1][2] = pin->GetReal("problem","xC2");
+  massFrac[1][3] = pin->GetReal("problem","xN2");
+  massFrac[1][4] = pin->GetReal("problem","xO2");
   // Remap radius, typically set to 5-10x finest cell radius
   remapRadius1 = pin->GetReal("problem","remapRadius1");
   remapRadius2 = pin->GetReal("problem","remapRadius2");
@@ -327,6 +407,11 @@ void Mesh::InitUserMeshData(ParameterInput *pin) {
     std::string OBCoolCurveFileName = pin->GetString("problem","OBCoolCurve");
     cc[0].Init(WRCoolCurveFileName);
     cc[1].Init(OBCoolCurveFileName);
+  }
+
+  if (dust_cool) {
+    eCurve[0].Init("electron_WC");
+    eCurve[1].Init("electron_solar");
   }
 
   // Note: it is only possible to have one source functions enrolled by the user.
@@ -664,6 +749,27 @@ void PhysicalSources(MeshBlock *pmb, const Real time, const Real dt, const Athen
   return;
 }
 
+//! \fn Real SearchAndInterpolate(Real xarray[], Real yarray[], Real x)
+// Function then performs a linear interpolation between two values in a lookup table
+// Uses C++ algorithm library
+Real SearchAndInterpolate(Real x, std::vector<Real> xarr, std::vector<Real> yarr) {
+  // Perform binary search using <algorithm> routine
+  auto upper = std::upper_bound(xarr.begin(),xarr.end(),x);
+  // Assign indexes to upper bound, found by <algorithm> and lower bound
+  int iu = std::distance(xarr.begin(),upper);
+  int il = iu - 1;
+  // Perform linear interpolation
+  // Find upper and lower values for each axis
+  Real xl = xarr[il];
+  Real xu = xarr[iu];
+  Real yl = yarr[il];
+  Real yu = yarr[iu];
+  // Interpolate
+  Real y = yl + ((x - xl) * ((yu - yl) / (xu - xl)));
+  // Finish up and return
+  return y;
+}
+
 //! \fn Real Calc_h_e(Real x_e)
 //  \brief Approximation of electron heating efficiency
 //         - Electron heating is based on on temperature and grain radius
@@ -705,29 +811,29 @@ Real Calc_h_e(Real x_e) {
 
 Real CalcGrainCoolRate(Real rhoG, Real a, Real T, int nc) {
   // === Setup ===
-  // Shorten temp * boltzmann constant to kBT, as this is used a lot  
+  // Shorten temp * boltzmann constant to kBT, as this is used a lot
   Real kBT = boltzman * T;
   // - Allocate a counter for the total amount of energy from each
   //   element collision
   // - Precalculated arrays for critical energy constant and atomic mass
   //   in CGS units for each type of element are declared:
-  //   - For H atoms Ec   = 133keV, m = 1.00797 AMU
-  //   - For He atoms Ec  = 222keV, m = 4.00260 AMU
-  //   - For CNO atoms Ec = 665keV, m = 12.0110 AMU
+  //   - For H atoms:   Ec = 133keV, m = 1.00797 AMU
+  //   - For He atoms:  Ec = 222keV, m = 4.00260 AMU
+  //   - For CNO atoms: Ec = 665keV, m = 12.011,14.0067,15.9994 AMU
   // - This assumes that carbon is dominant in CNO bin
-  Real E_E[3] = {2.1308949e-07,3.5568321e-07,1.0654475e-06};
-  Real m_E[3] = {1.6737736e-24,6.6464737e-24,1.9944735e-23};
-  Real n_E[3];  // Elemental number density, cm^-3
-  Real H_E[3];  // Heating for each element, erg s^-1
+  Real E_E[5] = {2.1308949e-07,3.5568321e-07,1.0654475e-06,1.0654475e-06,1.0654475e-06};
+  Real m_E[5] = {1.6737736e-24,6.6464737e-24,1.9944735e-23,2.3258673e-23,2.6567629e-23};
+  Real n_E[5] = {0.0,0.0,0.0,0.0,0.0};  // Elemental number density, cm^-3
+  Real H_E[5] = {0.0,0.0,0.0,0.0,0.0};  // Heating for each element, erg s^-1
   // === Processing ===
   // Determine heating rate from individual grain due to colliding atoms
   Real H_coll = 0.0;  // Heating rate, erg s^-1
   Real nT     = 0.0;  // Total number density, cm^-3
-  for (int n = 0 ; n < 3 ; n++) {
+  for (int n = 0 ; n < 5 ; n++) {
     // Calculate number density for element
-    n_E[n] = rhoG * xyz[nc][n] / m_E[n];
+    n_E[n] = rhoG * massFrac[nc][n] / m_E[n];
     // Calculate total number density
-    nT += n_E[n]; 
+    nT += n_E[n];
     // Calculate the critical energy of incident hydrogen atoms
     Real EC = E_E[n] * a;  
     // Calculate h_n (Grain heating efficiency due to atoms)
@@ -742,8 +848,13 @@ Real CalcGrainCoolRate(Real rhoG, Real a, Real T, int nc) {
   // "transparency", this can be off by up to 1%, but is nearly 2,000x
   // faster than a trap rule integration with 400 components and
   // uses almost no memory
-  // Assuming single ionisation, calculate electron number density
-  Real ne = nT;
+  // Estimate the total number of free electrons per ion
+  Real nFreeElectrons = 0.0;
+       if (T < eCurve[nc].TMin) nFreeElectrons = std::min(1.0,eCurve[nc].eMin);
+  else if (T > eCurve[nc].TMax) nFreeElectrons = eCurve[nc].eMax;
+  else nFreeElectrons = SearchAndInterpolate(T,eCurve[nc].T,eCurve[nc].e);
+  // Using this estimated value, calculate the electron number density
+  Real ne = nT * nFreeElectrons;
   // Calculate the critical energy for electron to penetrate grain
   // This makes the assumption of an uncharged dust grain, Ee = Ec
   Real Ee  = 3.6850063e-08 * pow(a,2.0/3.0);  // DW81 Eq A6
@@ -1761,6 +1872,9 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
 	      Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
 
         Real col = pmb->pscalars->s(0,k,j,i)/rho;  // wind colour (1.0 for primary wind, 0.0 for secondary wind)
+        Real cols[2];
+        cols[0] = col;
+        cols[1] = 1.0 - col;
 	
         //col  = prim[iqal0][k][j][i];   // (=1.0 for solar, 0.0 for WC)
       	//if (col > 0.5) avgm = stavgm[0][0];
@@ -1781,17 +1895,16 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
           rhod_dot = -1.33e-17*dens_g*a*a*ntot*nD; // dust destruction rate (g cm^-3 s^-1)
         }
         else if (temp < 1.4e4){
-          // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
-          Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
-          dadt = 0.25*eps_a*rho*wa/dens_g;
-          rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
-          //if (rho > 2.0*rho_smooth && col > 0.5){
-            // In cool WCR
-            //std::cout << "Growing grains inside WCR...\n";
-            //std::cout << "dadt = " << dadt << "; nD = " << nD << " (cm^-3); rhod_dot = " << rhod_dot << "\n";
-            //std::cout << "Aborting!\n";
-            //exit(EXIT_SUCCESS);
-          //}
+          for (int nw = 0; nw < 2; nw++) {
+            Real windFrac = cols[nw];
+            Real carbonMassFraction = massFrac[nw][2];
+            // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
+            Real wa  = std::sqrt(3.0*boltzman*temp/(A*massh));
+            dadt     = 0.25*eps_a*rho*wa/dens_g;
+            dadt    *= windFrac;
+            dadt    *= carbonMassFraction;
+            rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+          }
         }
         if (rhod_dot != 0.0){
           Real drhod = rhod_dot*dt;
@@ -1882,6 +1995,9 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
         Real ke = 0.5*rho*(u1*u1 + u2*u2 + u3*u3);
         Real pre = (cons(IEN, k, j, i) - ke)*gmma1;
         Real col = pmb->pscalars->s(0,k,j,i)/rho;  // wind colour (1.0 for primary wind, 0.0 for secondary wind)
+        Real cols[2];
+             cols[0] = col;
+             cols[1] = 1.0 - col;
         //if (col > 0.5) avgm = stavgm[0][0];
         //else           avgm = stavgm[1][0]; 
         Real z   = pmb->pscalars->s(1,k,j,i)/rho;  // dust mass fraction
@@ -1903,10 +2019,17 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
         // Dust only reasonably grows 
         if (r > remapRadius1) {
           if (temp < 1.4e4){
-            // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
-            Real wa = std::sqrt(3.0*boltzman*temp/(A*massh));
-            Real dadt = 0.25*eps_a*rho*wa/dens_g;
-            rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+            for (int nw = 0; nw < 2; nw++) {
+              // For each wind, determine the carbon content and wind mass fraction
+              Real windFraction       = cols[nw];
+              Real carbonMassFraction = massFrac[nw][2];
+              // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
+              Real wa    = std::sqrt(3.0*boltzman*temp/(A*massh));
+              Real dadt  = 0.25*eps_a*rho*wa/dens_g;
+                   dadt *= windFraction;
+                   dadt *= carbonMassFraction;
+              rhod_dot   = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+            }
           }
           if (temp > 1.0e6 && z > 0.0) {
             Real tauD = 3.156e17 * a / ntot;
