@@ -1895,16 +1895,22 @@ void EvolveDust(MeshBlock *pmb, const Real dt, AthenaArray<Real> &cons){
           rhod_dot = -1.33e-17*dens_g*a*a*ntot*nD; // dust destruction rate (g cm^-3 s^-1)
         }
         else if (temp < 1.4e4){
-          for (int nw = 0; nw < 2; nw++) {
-            Real windFrac = cols[nw];
-            Real carbonMassFraction = massFrac[nw][2];
-            // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
-            Real wa  = std::sqrt(3.0*boltzman*temp/(A*massh));
-            dadt     = 0.25*eps_a*rho*wa/dens_g;
-            dadt    *= windFrac;
-            dadt    *= carbonMassFraction;
-            rhod_dot = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+          // Calculate the average carbon mass fraction in the wind
+          Real carbonMassFrac = 0.0;
+          for (int nw = 0; nw < 2; nw++) {        
+            // Find per-wind carbon mass fraction, this is multiplied by the wind
+            // "colour" in order to determine the mass fraction   
+            Real windCarbonMassFrac = cols[nw] * massFrac[nw][2];
+            // Accululate, such that cmf = sum(windmfrac * colour)
+            carbonMassFrac += windCarbonMassFrac;
           }
+          // Calculate gas RMS velocity
+          Real wa  = std::sqrt(3.0*boltzman*temp/(A*massh));
+          // Calculate grain radius increase due to impinging carbon atoms
+          Real rhoC = rho * carbonMassFrac;  // Gas density of carbon in wind (g cm^-3)
+          dadt      = 0.25*eps_a*rhoC*wa/dens_g;  // Grain radius increase (cm)
+          // Calculate associated density incrase
+          rhod_dot = 4.0*PI*SQR(a)*dens_g*nD*dadt;
         }
         if (rhod_dot != 0.0){
           Real drhod = rhod_dot*dt;
@@ -2018,18 +2024,23 @@ Real DustCreationRateInWCR(MeshBlock *pmb, int iout){
 
         // Dust only reasonably grows 
         if (r > remapRadius1) {
-          if (temp < 1.4e4){
-            for (int nw = 0; nw < 2; nw++) {
-              // For each wind, determine the carbon content and wind mass fraction
-              Real windFraction       = cols[nw];
-              Real carbonMassFraction = massFrac[nw][2];
-              // Dust growth. Requires some grains to exist otherwise rhod_dot = 0.0	  
-              Real wa    = std::sqrt(3.0*boltzman*temp/(A*massh));
-              Real dadt  = 0.25*eps_a*rho*wa/dens_g;
-                   dadt *= windFraction;
-                   dadt *= carbonMassFraction;
-              rhod_dot   = 4.0*pi*a*a*dens_g*nD*dadt;    // dust growth rate (g cm^-3 s^-1)
+          if (temp < 1.4e4) {
+            // Calculate the average carbon mass fraction in the wind
+            Real carbonMassFrac = 0.0;
+            for (int nw = 0; nw < 2; nw++) {        
+              // Find per-wind carbon mass fraction, this is multiplied by the wind
+              // "colour" in order to determine the mass fraction   
+              Real windCarbonMassFrac = cols[nw] * massFrac[nw][2];
+              // Accululate, such that cmf = sum(windmfrac * colour)
+              carbonMassFrac += windCarbonMassFrac;
             }
+            // Calculate gas RMS velocity
+            Real wa  = std::sqrt(3.0*boltzman*temp/(A*massh));
+            // Calculate grain radius increase due to impinging carbon atoms
+            Real rhoC = rho * carbonMassFrac;  // Gas density of carbon in wind (g cm^-3)
+            Real dadt = 0.25*eps_a*rhoC*wa/dens_g;  // Grain radius increase (cm)
+            // Calculate associated density incrase
+            rhod_dot = 4.0*PI*SQR(a)*dens_g*nD*dadt;
           }
           if (temp > 1.0e6 && z > 0.0) {
             Real tauD = 3.156e17 * a / ntot;
